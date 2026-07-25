@@ -4,22 +4,35 @@ roots generates **task-specific, line-grounded codemaps** of a codebase — nest
 file-linked traces of how a feature or flow works, with an optional mermaid diagram.
 The model layer is pluggable so you can compare cloud LLMs against local models.
 
-Built from [`roots-blueprint-v1.md`](roots-blueprint-v1.md).
-
 ## Preview
 
-The codemap panel has two views you can toggle in the header.
+**Generate a codemap** — describe a task, pick a backend, and roots researches the
+repo and synthesizes a codemap. It also suggests starting points from your repository:
 
-**List view** — nested, numbered traces (`1`, `1a`, `1b`…) with a "See more"
-guide toggle, clickable `file:line` badges that jump to the code, and inline/block
-LaTeX rendered via KaTeX:
+![roots sidebar: generate form, backend picker, and repo suggestions](assets/sidebar-generate.png)
 
-![Codemap list view with nested traces and LaTeX](docs/screenshots/list-view.png)
+**Read the codemap** — a plain-language overview with clickable `[t1]` references,
+followed by nested, numbered traces (`1`, `1a`, `1b`…) and clickable `file:line`
+badges:
 
-**Map view** — the same codemap rendered as a mermaid diagram; clicking a node
-maps back to the code:
+![Codemap overview with clickable references and nested traces](assets/codemap-overview.png)
 
-![Codemap map view rendered as a mermaid diagram](docs/screenshots/map-view.png)
+**Jump to code** — click any `file:line` badge or reference to open the exact
+location in the editor:
+
+![Clicking a trace badge opens the source file at the referenced line](assets/jump-to-code.png)
+
+![Codemap and source shown side by side](assets/jump-to-code-split.png)
+
+**AI-generated guides** — expand any step for a Motivation/Details walkthrough of
+what the code does and why:
+
+![Expanded AI generated guide next to the source](assets/ai-guide.png)
+
+**Ask a question** — a grounded Q&A chat answers follow-ups about the codemap and
+cites the real files it used:
+
+![Ask-a-question chat answering a follow-up about the codemap](assets/ask-chat.png)
 
 > Design is inspired by [Windsurf Codemaps](https://cognition.com/blog/codemaps):
 > just-in-time, line-grounded maps for a specific task, with a text ⇄ diagram toggle
@@ -63,7 +76,7 @@ Bring your own key. The engine ships a catalog the UI lists:
 | NVIDIA NIM | cloud | OpenAI-compatible, free tier |
 | Groq | cloud | OpenAI-compatible |
 | Ollama | local | no key, needs Ollama running |
-| cellm | local | cellm sidecar (OpenAI-compatible), the differentiator |
+| [cellm](https://github.com/jeffasante/cellm) | local | cellm sidecar (OpenAI-compatible), the differentiator |
 
 Keys are stored in VS Code SecretStorage, never written to disk or logs.
 
@@ -91,5 +104,5 @@ npm run engine         # starts the JSON-RPC stdio server
 
 ## Status
 
-Phase 0 (engine core) + partial Phase 1 (adapter MVP) per the blueprint roadmap.
+Phase 0 (engine core) + partial Phase 1 (adapter MVP).
 Next: eval harness, editor decorations, and richer webview navigation.
