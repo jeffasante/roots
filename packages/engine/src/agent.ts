@@ -1,4 +1,5 @@
 import type { InferenceBackend } from "./backends/types.js";
+import { repoFileInventory } from "./suggestions.js";
 import { Tools } from "./tools.js";
 import type { Codemap, Diagram, DiagramEdge, LogEntry, Trace } from "./types.js";
 import { CODEMAP_VERSION } from "./types.js";
@@ -116,6 +117,14 @@ export class Agent {
     const log: LogEntry[] = [];
     const history: string[] = [];
 
+    // Orient the model on the files that ACTUALLY exist before it starts
+    // reading. Without this it guesses plausible-but-fake paths (library names,
+    // wrong extensions) and burns research steps on read errors.
+    const inventory = repoFileInventory(tools);
+    const taskContext = inventory
+      ? `Task: ${opts.query}\n\n${inventory}\n\nOnly read/grep files that appear in the inventory above.`
+      : `Task: ${opts.query}`;
+
     // ---- Phase 1: research ----
     for (let step = 0; step < maxSteps; step++) {
       opts.onProgress?.({ phase: "research", message: `Researching (step ${step + 1})`, step: step + 1 });
@@ -124,7 +133,7 @@ export class Agent {
         jsonMode: true,
         messages: [
           { role: "system", content: RESEARCH_SYSTEM },
-          { role: "user", content: `Task: ${opts.query}` },
+          { role: "user", content: taskContext },
           ...history.map((h) => ({ role: "assistant" as const, content: h })),
           { role: "user", content: "Next action?" },
         ],

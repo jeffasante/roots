@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseSuggestions, rankHubs, isBarrelOrTypeOnly } from "./suggestions.js";
+import { parseSuggestions, rankHubs, isBarrelOrTypeOnly, repoFileInventory } from "./suggestions.js";
 import { Tools } from "./tools.js";
 
 function withRepo(files: Record<string, string>, run: (tools: Tools) => void): void {
@@ -132,6 +132,37 @@ test("isBarrelOrTypeOnly excludes re-export barrels and type-only modules", () =
   assert.equal(isBarrelOrTypeOnly(`export interface Foo { id: string }\nexport type Bar = number;`), true);
   assert.equal(isBarrelOrTypeOnly(`export function handle() { return 1; }`), false);
   assert.equal(isBarrelOrTypeOnly(`export class Server { start() {} }`), false);
+});
+
+test("repoFileInventory lists real source files grouped by extension", () => {
+  withRepo(
+    {
+      "src/main.rs": "fn main() {}",
+      "src/kv_cache.rs": "pub fn alloc() {}",
+      "app/loader.swift": "func load() {}",
+      "README.md": "# repo",
+      "assets/logo.png": "binary",
+    },
+    (tools) => {
+      const inventory = repoFileInventory(tools);
+      assert.match(inventory, /Source file inventory/);
+      // Real source files appear verbatim...
+      assert.match(inventory, /src\/main\.rs/);
+      assert.match(inventory, /src\/kv_cache\.rs/);
+      assert.match(inventory, /app\/loader\.swift/);
+      // ...grouped by extension with counts.
+      assert.match(inventory, /\.rs \(2 files\)/);
+      assert.match(inventory, /\.swift \(1 file\)/);
+      // Non-source files are not listed as code.
+      assert.ok(!/logo\.png/.test(inventory), "non-source assets should be excluded");
+    }
+  );
+});
+
+test("repoFileInventory returns empty string for a repo with no source files", () => {
+  withRepo({ "README.md": "# docs", "data.json": "{}" }, (tools) => {
+    assert.equal(repoFileInventory(tools), "");
+  });
 });
 
 test("rankHubs ranks the most-imported behavioral file", () => {

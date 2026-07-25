@@ -140,6 +140,13 @@ function collectRepoSignal(tools: Tools): string {
     }
   }
 
+  // 1b. Full source-file inventory grouped by language. Without the real list
+  // of files that exist, the model invents plausible-but-fake paths (e.g.
+  // library names like `aiohappyeyeballs/types.py`). Giving it the actual
+  // filenames is the single biggest defense against hallucinated paths.
+  const inventory = buildFileInventory(sourceFiles);
+  if (inventory) sections.push(inventory);
+
   // 2. Headers of key files: prefer the ranked hubs (behavioral, central),
   // then fall back to entry-point-named files for breadth.
   const headerTargets = dedupe([...hubs.map((h) => h.file), ...sourceFiles]).slice(0, 6);
@@ -434,6 +441,61 @@ function pickSourceFiles(tools: Tools): string[] {
     return hintScore * 100 + file.split("/").length; // prefer entry points nearer the root
   };
   return sources.sort((a, b) => score(a) - score(b));
+}
+
+/** How many files to list per language before truncating with a count. */
+const INVENTORY_PER_LANGUAGE = 40;
+/** Hard cap on the total inventory listing so it can't dominate the prompt. */
+const INVENTORY_TOTAL_CAP = 200;
+
+/**
+ * Public entry: build the real `ls`-style source inventory for a repo. Shared
+ * by the suggestion generator and the codemap research phase so both orient on
+ * files that actually exist instead of guessing.
+ */
+export function repoFileInventory(tools: Tools): string {
+  return buildFileInventory(pickSourceFiles(tools));
+}
+
+/**
+ * Build a real `ls`-style inventory of the source files that actually exist,
+ * grouped by extension. This is EVIDENCE, not a hint: every path the model is
+ * allowed to name must appear here, which is what stops it inventing library
+ * paths that aren't in the repo.
+ */
+function buildFileInventory(sourceFiles: string[]): string {
+  if (!sourceFiles.length) return "";
+
+  const byExt = new Map<string, string[]>();
+  for (const file of sourceFiles) {
+    const dot = file.lastIndexOf(".");
+    const ext = dot >= 0 ? file.slice(dot).toLowerCase() : "(none)";
+    const bucket = byExt.get(ext) ?? [];
+    bucket.push(file);
+    byExt.set(ext, bucket);
+  }
+
+  // Show the largest language groups first — they carry the core logic.
+  const groups = [...byExt.entries()].sort((a, b) => b[1].length - a[1].length);
+
+  const lines: string[] = [];
+  let total = 0;
+  for (const [ext, files] of groups) {
+    if (total >= INVENTORY_TOTAL_CAP) break;
+    const shown = files.slice(0, INVENTORY_PER_LANGUAGE);
+    const remaining = files.length - shown.length;
+    lines.push(`${ext} (${files.length} file${files.length === 1 ? "" : "s"}):`);
+    for (const file of shown) {
+      if (total >= INVENTORY_TOTAL_CAP) break;
+      lines.push(`  ${file}`);
+      total += 1;
+    }
+    if (remaining > 0 && total < INVENTORY_TOTAL_CAP) {
+      lines.push(`  … ${remaining} more`);
+    }
+  }
+
+  return `--- Source file inventory (real paths — only reference files from this list) ---\n${lines.join("\n")}`;
 }
 
 /** Drop the "<n>\t" line-number prefix that readFile prepends. */
