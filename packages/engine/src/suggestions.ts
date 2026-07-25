@@ -70,6 +70,7 @@ Rules:
 - Return exactly 3 suggestions.
 - Ground every suggestion in the actual code evidence provided (file headers, symbols, README). Do NOT describe the repo by its languages or folder names (never write things like "Python scripts in the scripts directory" or "the Rust code").
 - Each suggestion must name at least one concrete file path and one real function, class, or symbol taken from the evidence, and describe a specific runtime behavior or data flow through it.
+- Prefer the "structurally central files" as starting points when they fit — they are the most-imported modules and usually anchor the important flows. This is a hint, not a requirement.
 - Prefer flows a developer would actually want to trace: how a request/command is handled, how a feature works end-to-end, how a subsystem is wired — not project structure or configuration listings.
 - Titles must be under 55 characters; descriptions under 120 characters.
 - The "query" must instruct roots to trace a specific flow, naming the real files/symbols to start from.
@@ -109,6 +110,19 @@ const ENTRYPOINT_HINTS = ["main", "index", "app", "server", "cli", "lib", "mod",
  */
 function collectRepoSignal(tools: Tools): string {
   const sections: string[] = [];
+  const sourceFiles = pickSourceFiles(tools);
+
+  // 0. Structurally central files ("hubs"). This is a PROMPT HINT only —
+  // it points the model at code worth starting from. It never becomes a
+  // claim in the codemap output; that path still runs through the normal
+  // location/summary verification.
+  const hubs = rankHubs(tools, sourceFiles);
+  if (hubs.length) {
+    const lines = hubs.map((h) => `${h.file} (imported by ${h.importers} file${h.importers === 1 ? "" : "s"})`);
+    sections.push(
+      `--- Structurally central files (start here; ranked by internal importers) ---\n${lines.join("\n")}`
+    );
+  }
 
   // 1. Project description from a README, if present.
   for (const doc of DOC_CANDIDATES) {
@@ -124,9 +138,10 @@ function collectRepoSignal(tools: Tools): string {
     }
   }
 
-  // 2. Headers of likely entry-point source files (breadth over depth).
-  const sourceFiles = pickSourceFiles(tools);
-  for (const file of sourceFiles.slice(0, 6)) {
+  // 2. Headers of key files: prefer the ranked hubs (behavioral, central),
+  // then fall back to entry-point-named files for breadth.
+  const headerTargets = dedupe([...hubs.map((h) => h.file), ...sourceFiles]).slice(0, 6);
+  for (const file of headerTargets) {
     try {
       const read = tools.readFile(file, 1, 30);
       const text = stripLineNumbers(read.content).trim();
@@ -155,6 +170,131 @@ function collectRepoSignal(tools: Tools): string {
   if (symbolLines.length) sections.push(`--- Symbol definitions ---\n${symbolLines.join("\n")}`);
 
   return sections.join("\n\n").slice(0, 6000) || "(no readable source files found)";
+}
+
+export interface Hub {
+  file: string;
+  importers: number;
+}
+
+/** Extensions whose imports we can resolve to sibling files by relative path. */
+const GRAPHABLE_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
+
+/** Matches `import ... from "x"`, `export ... from "x"`, and `require("x")`. */
+const IMPORT_SPECIFIER = /(?:from|require\()\s*['"]([^'"]+)['"]/g;
+
+/**
+ * Rank the most-imported internal files ("hubs") to hint at what is
+ * structurally central. Guards against the two classic failure modes:
+ *   - Barrel/type-only files (index re-exports, pure type modules) are
+ *     dropped so we surface behavior, not just where names live.
+ *   - Only a flat importer COUNT is computed (no graph traversal), so import
+ *     cycles cannot cause infinite loops.
+ *
+ * Scope is deliberately narrow: exact + relative TS/JS imports only. No
+ * tsconfig path-alias or workspace resolution yet.
+ */
+export function rankHubs(tools: Tools, sourceFiles: string[]): Hub[] {
+  const graphable = sourceFiles.filter((file) => GRAPHABLE_EXTENSIONS.some((ext) => file.endsWith(ext)));
+  if (graphable.length === 0) return [];
+
+  // Index every graphable file by the path forms an import could resolve to,
+  // so a relative specifier can be matched back to a real file.
+  const byResolvedPath = new Map<string, string>();
+  for (const file of graphable) {
+    for (const key of importKeysFor(file)) byResolvedPath.set(key, file);
+  }
+
+  const importerCount = new Map<string, number>();
+  const barrelOrTypeOnly = new Set<string>();
+
+  for (const file of graphable) {
+    let content: string;
+    try {
+      content = stripLineNumbers(tools.readFile(file).content);
+    } catch {
+      continue;
+    }
+
+    if (isBarrelOrTypeOnly(content)) barrelOrTypeOnly.add(file);
+
+    const dir = file.includes("/") ? file.slice(0, file.lastIndexOf("/")) : "";
+    const resolved = new Set<string>();
+    for (const match of content.matchAll(IMPORT_SPECIFIER)) {
+      const spec = match[1];
+      if (!spec.startsWith(".")) continue; // skip package imports; relative only
+      const target = resolveRelative(dir, spec, byResolvedPath);
+      if (target && target !== file) resolved.add(target); // ignore self-imports
+    }
+    for (const target of resolved) {
+      importerCount.set(target, (importerCount.get(target) ?? 0) + 1);
+    }
+  }
+
+  return [...importerCount.entries()]
+    .filter(([file, count]) => count >= 2 && !barrelOrTypeOnly.has(file))
+    .map(([file, importers]) => ({ file, importers }))
+    .sort((a, b) => (b.importers !== a.importers ? b.importers - a.importers : a.file.localeCompare(b.file)))
+    .slice(0, 6);
+}
+
+/** The path forms a relative import could name this file by (with/without ext, index). */
+function importKeysFor(file: string): string[] {
+  const keys = [file];
+  const dot = file.lastIndexOf(".");
+  if (dot > file.lastIndexOf("/")) keys.push(file.slice(0, dot)); // drop extension
+  if (/\/index\.[cm]?[jt]sx?$/.test(file)) {
+    keys.push(file.replace(/\/index\.[cm]?[jt]sx?$/, "")); // dir -> its index file
+  }
+  return keys;
+}
+
+/** Resolve a relative specifier from `dir` against the known file index. */
+function resolveRelative(dir: string, spec: string, index: Map<string, string>): string | undefined {
+  const combined = dir ? `${dir}/${spec}` : spec;
+  const normalized = normalizePath(combined);
+  return (
+    index.get(normalized) ??
+    // TS commonly imports ".js" but the source file is ".ts"; try swapping.
+    index.get(normalized.replace(/\.js$/, ".ts")) ??
+    index.get(normalized.replace(/\.js$/, ".tsx")) ??
+    index.get(`${normalized}/index`)
+  );
+}
+
+/** Collapse "." and ".." segments in a POSIX-style path. */
+function normalizePath(p: string): string {
+  const out: string[] = [];
+  for (const seg of p.split("/")) {
+    if (seg === "" || seg === ".") continue;
+    if (seg === "..") out.pop();
+    else out.push(seg);
+  }
+  return out.join("/");
+}
+
+/**
+ * A file is a "barrel or type-only" module if it is essentially just
+ * re-exports or type declarations — high import count, low behavioral signal.
+ */
+export function isBarrelOrTypeOnly(content: string): boolean {
+  const code = content
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith("//") && !l.startsWith("*") && !l.startsWith("/*"));
+  if (code.length === 0) return true;
+
+  const reExports = code.filter((l) => /^export\s+.*\bfrom\b/.test(l) || /^export\s+\*/.test(l)).length;
+  if (reExports > 0 && reExports >= code.length * 0.5) return true; // mostly a barrel
+
+  // Type-only: has type/interface surface but no runtime function/class bodies.
+  const hasRuntime = code.some((l) => /\b(function|class)\b/.test(l) || /=>|\brequire\(/.test(l));
+  const hasTypeSurface = code.some((l) => /^(export\s+)?(type|interface|enum)\b/.test(l));
+  return hasTypeSurface && !hasRuntime;
+}
+
+function dedupe(items: string[]): string[] {
+  return [...new Set(items)];
 }
 
 /** Choose a handful of source files that most likely hold entry points. */
