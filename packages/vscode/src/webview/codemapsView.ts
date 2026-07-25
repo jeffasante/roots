@@ -698,7 +698,11 @@ export class CodemapsViewProvider implements vscode.WebviewViewProvider {
 
   // Per-card: chevron toggles the description; title/body generates.
   function generateFrom(card) {
-    query.value = card.dataset.query;
+    // Insert the text the user actually sees on the card (its title), not the
+    // longer internal prompt — otherwise the box shows something different from
+    // what was clicked, which is confusing.
+    const titleEl = card.querySelector('.suggestion-title');
+    query.value = (titleEl ? titleEl.textContent : card.dataset.query || '').trim();
     saveState({ query: query.value });
     query.focus();
     query.scrollIntoView({ block:'nearest' });
