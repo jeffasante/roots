@@ -9,30 +9,28 @@ The model layer is pluggable so you can compare cloud LLMs against local models.
 **Generate a codemap** — describe a task, pick a backend, and roots researches the
 repo and synthesizes a codemap. It also suggests starting points from your repository:
 
-![roots sidebar: generate form, backend picker, and repo suggestions](assets/sidebar-generate.png)
+![roots panel: generate form, model picker, and repo suggestions](packages/vscode/media/codemap-panel.png)
 
 **Read the codemap** — a plain-language overview with clickable `[t1]` references,
 followed by nested, numbered traces (`1`, `1a`, `1b`…) and clickable `file:line`
 badges:
 
-![Codemap overview with clickable references and nested traces](assets/codemap-overview.png)
+![Codemap overview with clickable references and nested traces](packages/vscode/media/codemap-overview.png)
 
 **Jump to code** — click any `file:line` badge or reference to open the exact
 location in the editor:
 
-![Clicking a trace badge opens the source file at the referenced line](assets/jump-to-code.png)
+![Codemap overview beside the referenced source](packages/vscode/media/jump-to-code.png)
 
-![Codemap and source shown side by side](assets/jump-to-code-split.png)
+**See the flow as a diagram** — switch to the diagram view to see how the steps
+connect, and click a node to open its code:
 
-**AI-generated guides** — expand any step for a Motivation/Details walkthrough of
-what the code does and why:
+![Codemap diagram view](packages/vscode/media/codemap-diagram.png)
 
-![Expanded AI generated guide next to the source](assets/ai-guide.png)
+**Lock it in with active recall** — turn any codemap into a graded recall quiz that
+the model checks against the verified trace:
 
-**Ask a question** — a grounded Q&A chat answers follow-ups about the codemap and
-cites the real files it used:
-
-![Ask-a-question chat answering a follow-up about the codemap](assets/ask-chat.png)
+![Active recall quiz graded against the verified trace](packages/vscode/media/active-recall-quiz.png)
 
 > Design is inspired by [Windsurf Codemaps](https://cognition.com/blog/codemaps):
 > just-in-time, line-grounded maps for a specific task, with a text ⇄ diagram toggle
