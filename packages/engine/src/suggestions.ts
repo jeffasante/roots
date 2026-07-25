@@ -73,8 +73,9 @@ Rules:
 - Prefer the "structurally central files" as starting points when they fit — they are the most-imported modules and usually anchor the important flows. This is a hint, not a requirement.
 - Prefer flows a developer would actually want to trace: how a request/command is handled, how a feature works end-to-end, how a subsystem is wired — not project structure or configuration listings.
 - Titles must be under 55 characters.
-- "description" is a rich 2-3 sentence explanation (roughly 180-300 characters): say what the flow does, which concrete files/symbols it touches, and why it is worth tracing. Be specific, not generic.
-- The "query" must instruct roots to trace a specific flow, naming the real files/symbols to start from.
+- "description" is a rich 2-3 sentence explanation (roughly 180-300 characters): say what the flow does, which concrete files/symbols it touches, and why it is worth tracing. Be specific, not generic. Write it for a human — do NOT put the word "Query:" or a query string inside the description; the query goes in its own "query" field.
+- Every file path and symbol you mention MUST appear verbatim in the provided evidence. Never invent paths or import well-known library names (e.g. do not write "datasets/io/abc.py" or "aiohappyeyeballs/types.py" unless they literally appear in the evidence).
+- The "query" must instruct roots to trace a specific flow, naming the real files/symbols (from the evidence) to start from.
 
 Difficulty for this batch (${intensity}):
 ${INTENSITY_GUIDANCE[intensity]}`,
@@ -466,13 +467,25 @@ export function parseSuggestions(content: string): CodemapSuggestion[] {
       // A detailed description is what makes the card useful. If the model
       // omitted or truncated it, fall back to the query text so the card is
       // never empty rather than dropping the whole suggestion.
-      const description = (item.description?.trim() || query).slice(0, 320);
+      const description = cleanDescription(item.description?.trim() || query).slice(0, 320);
       return {
         title: item.title.trim().slice(0, 55),
         description,
         query,
       };
     });
+}
+
+/**
+ * Strip a trailing machine-facing clause the model sometimes appends to the
+ * description — e.g. `... socket handling. Query: \`a.py, b.py\`` — so the card
+ * shows a clean human explanation instead of a leaked query string.
+ */
+function cleanDescription(description: string): string {
+  return description
+    .replace(/\s*(?:^|[.\s])(?:query|prompt)\s*:\s*[`'"].*$/is, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 /**

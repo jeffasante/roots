@@ -92,6 +92,25 @@ test("salvages complete suggestions from a truncated json array", () => {
   assert.equal(result[1].title, "Routing");
 });
 
+test("strips a leaked 'Query:' clause from the description", () => {
+  const content = JSON.stringify({
+    suggestions: [
+      {
+        title: "Paged KV Cache",
+        description:
+          "Explore the paged KV cache in `kv_cache.rs`, tracing allocation flows. Query: `kv_cache.rs, main.rs`",
+        query: "Trace the paged KV cache from kv_cache.rs.",
+      },
+    ],
+  });
+
+  const result = parseSuggestions(content);
+
+  assert.equal(result.length, 1);
+  assert.ok(!/query\s*:/i.test(result[0].description), "description should not contain a Query: clause");
+  assert.ok(result[0].description.startsWith("Explore the paged KV cache"));
+});
+
 test("keeps a detailed multi-sentence description up to the cap", () => {
   const longDescription =
     "Trace how the request handler in server.ts dispatches to the codemap agent. " +
