@@ -96,9 +96,11 @@ const DOC_CANDIDATES = ["README.md", "README.rst", "README.txt", "readme.md", "A
 
 /** Extensions worth reading for entry-point / symbol signal. */
 const SOURCE_EXTENSIONS = new Set([
-  ".ts", ".tsx", ".js", ".jsx", ".mjs",
-  ".py", ".rs", ".go", ".java", ".kt",
-  ".rb", ".php", ".c", ".cc", ".cpp", ".h", ".hpp", ".cs", ".swift",
+  ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
+  ".py", ".pyi", ".rs", ".go", ".java", ".kt", ".kts", ".scala",
+  ".rb", ".php", ".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".hh", ".cs", ".swift",
+  ".m", ".mm", ".dart", ".ex", ".exs", ".erl", ".hs", ".ml", ".lua", ".jl",
+  ".zig", ".vue", ".svelte",
 ]);
 
 /** File-name hints that usually mark an entry point or core module. */

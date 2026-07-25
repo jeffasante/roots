@@ -16,17 +16,51 @@ export interface GrepMatch {
   text: string;
 }
 
+/**
+ * Directory names to skip during scans, kept language-agnostic on purpose so a
+ * Rust `target/`, a Go `vendor/`, or a Python `.venv/` are all pruned the same
+ * way a JS `node_modules/` is. Without this, build output (e.g. hundreds of
+ * generated `.rs` files under `target/debug/deps`) floods the file inventory
+ * and buries the real source the model should read.
+ */
 const DEFAULT_IGNORES = new Set([
   ".git",
+  // JS / TS
   "node_modules",
   "dist",
   "out",
-  "build",
   ".next",
+  ".nuxt",
+  ".svelte-kit",
+  "coverage",
+  // Python
   ".venv",
+  "venv",
   "__pycache__",
+  ".mypy_cache",
+  ".pytest_cache",
+  ".tox",
+  ".ipynb_checkpoints",
+  "site-packages",
+  // Rust
+  "target",
+  // Go
+  "vendor",
+  // Java / Kotlin / Gradle
+  ".gradle",
+  // General
+  ".idea",
   ".roots",
 ]);
+
+/** Directory-name suffixes to skip (glob-style names can't live in a Set). */
+const IGNORE_SUFFIXES = [".egg-info"];
+
+/** True when a directory entry should be pruned from scans. */
+function isIgnoredDir(name: string): boolean {
+  if (DEFAULT_IGNORES.has(name)) return true;
+  return IGNORE_SUFFIXES.some((suffix) => name.endsWith(suffix));
+}
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024; // skip files larger than 2MB during scans
 const MAX_GREP_RESULTS = 200;
@@ -132,7 +166,7 @@ export class Tools {
     const dir = subPath ? this.resolveInsideRoot(subPath) : this.repoRoot;
     const entries = fs.readdirSync(dir, { withFileTypes: true });
     return entries
-      .filter((e) => !DEFAULT_IGNORES.has(e.name))
+      .filter((e) => !isIgnoredDir(e.name))
       .map((e) => ({ name: e.name, type: e.isDirectory() ? ("dir" as const) : ("file" as const) }))
       .sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === "dir" ? -1 : 1));
   }
@@ -174,7 +208,7 @@ export class Tools {
       return;
     }
     for (const entry of entries) {
-      if (DEFAULT_IGNORES.has(entry.name)) continue;
+      if (isIgnoredDir(entry.name)) continue;
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         yield* this.walk(full);

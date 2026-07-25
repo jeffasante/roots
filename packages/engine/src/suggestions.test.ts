@@ -165,6 +165,29 @@ test("repoFileInventory returns empty string for a repo with no source files", (
   });
 });
 
+test("repoFileInventory excludes build/dependency directories across ecosystems", () => {
+  withRepo(
+    {
+      "src/main.rs": "fn main() {}",
+      // Rust build output — must not flood the inventory.
+      "target/debug/deps/dep1.rs": "pub fn dep1() {}",
+      "target/debug/deps/dep2.rs": "pub fn dep2() {}",
+      // Go vendored dependency source.
+      "vendor/github.com/foo/foo.go": "package foo",
+      // Python virtual env.
+      ".venv/lib/site.py": "x = 1",
+    },
+    (tools) => {
+      const inventory = repoFileInventory(tools);
+      assert.match(inventory, /src\/main\.rs/);
+      assert.match(inventory, /\.rs \(1 file\)/, "only the real source .rs should remain");
+      assert.ok(!/target\//.test(inventory), "Rust target/ must be excluded");
+      assert.ok(!/vendor\//.test(inventory), "Go vendor/ must be excluded");
+      assert.ok(!/\.venv\//.test(inventory), "Python .venv/ must be excluded");
+    }
+  );
+});
+
 test("rankHubs ranks the most-imported behavioral file", () => {
   withRepo(
     {
