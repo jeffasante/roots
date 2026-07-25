@@ -93,7 +93,9 @@ Rules:
 - Build a TWO-LEVEL tree: 3–6 top-level sections (phases/concepts), each with 2–4 concrete child sub-steps referenced via "children" ids. Aim for 10+ total traces when the research supports it.
 - Every location MUST be a real file and line range from the research log. Never invent files or lines. Point child locations at the exact function/statement (tight ranges), and section locations at the enclosing block.
 - Titles: sections name a concept ("Admin Authentication Middleware"); children name a concrete action ("API key extraction from headers").
-- Top-level sections should include "motivation" and "details" when the research supports them. Do not add these fields to simple child actions.
+- Top-level sections should include "motivation" and "details" when the research supports them.
+- Child steps: ALWAYS give a specific 1-2 sentence "summary" that names the exact variables/functions/branches involved and what happens to them. When a child step is non-trivial (a loop, a state mutation, a guard/validation, an error path, a resource free/allocation), also add a "details" field of 1-2 short paragraphs explaining HOW it works and the edge cases (e.g. bounds checks, double-free protection, ordering guarantees). Skip "details" only for trivial one-line steps.
+- Prefer depth over breadth: it is better to fully explain a real child step (summary + details grounded in the cited lines) than to add another shallow label. Every claim in a summary/details must trace back to a location in the research log.
 - summaries are concrete and specific to the cited code — not generic. Order sections in execution/flow order; order children in the order they run.
 - Prose fields may use concise Markdown for emphasis, inline code, lists, and fenced code blocks. Do not emit raw HTML or Markdown headings.
 - overview is required and must reference several trace ids in [brackets].

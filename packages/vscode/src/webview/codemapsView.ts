@@ -468,7 +468,8 @@ export class CodemapsViewProvider implements vscode.WebviewViewProvider {
   .sub-title { font-weight:550; font-size:11.5px; flex:1; line-height:1.35; }
   .sub-summary { color:var(--muted); line-height:1.45; margin:3px 0 0 28px; font-size:11px; }
   .flow-label { padding-top:6px; padding-bottom:2px; }
-  .flow-label-text { color:var(--muted); font-size:11px; font-family:var(--vscode-editor-font-family, monospace); }
+  .flow-label-text { display:block; color:var(--muted); font-size:11px; font-family:var(--vscode-editor-font-family, monospace); }
+  .label-summary { color:var(--muted); line-height:1.45; margin:3px 0 0 0; font-size:11px; }
   .source-line { margin:5px 0 0 28px; padding:6px 8px; overflow-x:auto; color:var(--vscode-editor-foreground); background:var(--vscode-textCodeBlock-background); border:1px solid var(--border); border-radius:4px; font:10.5px/1.5 var(--vscode-editor-font-family, monospace); white-space:pre; tab-size:2; }
   .source-line code { display:block; }
   .expandable.collapsed { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; }
@@ -768,9 +769,11 @@ export class CodemapsViewProvider implements vscode.WebviewViewProvider {
       location:{ file: loc.dataset.file, start_line: Number(loc.dataset.start), end_line: Number(loc.dataset.end) }
     });
   });
-  // Clicking anywhere on a step card jumps to its file:line in the editor.
+  // Clicking anywhere on a step card jumps to its file:line in the editor —
+  // except when the click lands on an interactive control (loc chip, see-more,
+  // guide toggle, or the expandable guide body itself).
   for (const step of document.querySelectorAll('.flow-step[data-file]')) step.addEventListener('click', (event) => {
-    if (event.target.closest('.trace-loc') || event.target.closest('.see-more')) return;
+    if (event.target.closest('.trace-loc') || event.target.closest('.see-more') || event.target.closest('.guide-toggle') || event.target.closest('.guide')) return;
     vscode.postMessage({
       type:'reveal',
       location:{ file: step.dataset.file, start_line: Number(step.dataset.start), end_line: Number(step.dataset.end) }
@@ -1112,14 +1115,18 @@ function flowNode(
         </div>
         ${summaryHtml(trace.summary, "sub-summary")}
         ${snippet ? `<pre class="source-line"><code>${escapeHtml(snippet)}</code></pre>` : ""}
+        ${guideHtml(trace)}
       </div>
       ${nestedHtml}
     </div>`;
   }
 
-  // Lifecycle label: a muted, connected tree node with no code card.
+  // Lifecycle label: a muted, connected tree node. Even without a code card it
+  // carries a summary so the flow reads in depth rather than as a bare label.
   return `<div class="flow-node flow-label">
     <span class="flow-label-text">${escapeHtml(trace.title)}</span>
+    ${summaryHtml(trace.summary, "label-summary")}
+    ${guideHtml(trace)}
     ${nestedHtml}
   </div>`;
 }
