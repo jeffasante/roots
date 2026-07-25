@@ -12,6 +12,7 @@ export class BackendsPanel {
   private static current: BackendsPanel | undefined;
   private readonly panel: vscode.WebviewPanel;
   private disposables: vscode.Disposable[] = [];
+  private backends: BackendOption[] = [];
 
   static show(backends: BackendOption[]): void {
     if (BackendsPanel.current) {
@@ -33,11 +34,14 @@ export class BackendsPanel {
     this.panel = panel;
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
     this.panel.webview.onDidReceiveMessage(
-      (msg: { type?: string }) => {
+      (msg: { type?: string; idx?: number }) => {
         if (msg?.type === "generate") {
           void vscode.commands.executeCommand("roots.generateCodemap");
         } else if (msg?.type === "selectModel") {
           void vscode.commands.executeCommand("roots.selectModel");
+        } else if (msg?.type === "useBackend" && typeof msg.idx === "number") {
+          const option = this.backends[msg.idx];
+          if (option) void vscode.commands.executeCommand("roots.useBackend", option);
         }
       },
       null,
@@ -46,6 +50,7 @@ export class BackendsPanel {
   }
 
   private render(backends: BackendOption[]): void {
+    this.backends = backends;
     this.panel.webview.html = this.html(backends);
   }
 
@@ -127,7 +132,7 @@ export class BackendsPanel {
     for (const btn of document.querySelectorAll(".use-btn")) {
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
-        vscodeApi.postMessage({ type: "selectModel" });
+        vscodeApi.postMessage({ type: "useBackend", idx: Number(btn.dataset.idx) });
       });
     }
   </script>
@@ -163,7 +168,7 @@ function backendCard(b: BackendOption, i: number): string {
     <div class="card-body">
       <div class="desc" style="margin-bottom:6px;">${escapeHtml(b.description)}</div>
       ${body}
-      <button class="btn use-btn" style="margin-top:10px;">Use this backend</button>
+      <button class="btn use-btn" data-idx="${i}" style="margin-top:10px;">Use this backend</button>
     </div>
   </div>`;
 }

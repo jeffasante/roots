@@ -12,7 +12,7 @@ import {
 } from "./engineClient.js";
 import { BackendsPanel } from "./webview/backendsPanel.js";
 import { CodemapsViewProvider } from "./webview/codemapsView.js";
-import { ModelPickerPanel } from "./webview/modelPickerPanel.js";
+import type { ModelChoice, CurrentSelection } from "./webview/modelPickerPanel.js";
 import { CodemapPanel } from "./webview/panel.js";
 import { QuizPanel, type GradeRequest, type GradeResult } from "./webview/quizPanel.js";
 
@@ -32,6 +32,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const readFavorites = () => context.globalState.get<string[]>(FAVORITES_KEY, []);
   codemapsView = new CodemapsViewProvider({
     generate: (query) => generateCodemap(context, query),
+    cancelGenerate: () => engine?.cancelActiveWork(),
     open: (codemap) => CodemapPanel.show(codemap),
     quiz: (codemap) => QuizPanel.show(codemap),
     delete: (codemap) => deleteCodemap({ kind: "codemap", codemap }),
@@ -59,6 +60,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("roots.startQuiz", (node?: CodemapNode) => startQuiz(node)),
     vscode.commands.registerCommand("roots.showBackends", () => showBackends()),
     vscode.commands.registerCommand("roots.selectModel", () => selectModel(context)),
+    vscode.commands.registerCommand("roots.useBackend", (option: BackendOption) => useBackend(context, option)),
     vscode.commands.registerCommand("roots.setApiKey", () => setApiKey(context)),
     vscode.commands.registerCommand("roots.deleteCodemap", (node: CodemapNode) => deleteCodemap(node)),
     vscode.commands.registerCommand("roots.openLocation", (repoRoot: string, loc: Location) =>
@@ -130,8 +132,13 @@ async function generateCodemap(context: vscode.ExtensionContext, requestedQuery?
   codemapsView?.setGenerating(query);
 
   await vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Notification, title: "roots: generating codemap", cancellable: false },
-    async (progress) => {
+    { location: vscode.ProgressLocation.Notification, title: "roots: generating codemap", cancellable: true },
+    async (progress, token) => {
+      let cancelled = false;
+      token.onCancellationRequested(() => {
+        cancelled = true;
+        engine!.cancelActiveWork();
+      });
       engine!.onProgress((e) => {
         progress.report({ message: e.message });
         codemapsView?.setProgress(e);
@@ -143,7 +150,11 @@ async function generateCodemap(context: vscode.ExtensionContext, requestedQuery?
           `roots: codemap "${codemap.id}" created with ${codemap.traces.length} trace(s).`
         );
       } catch (err) {
-        void vscode.window.showErrorMessage(`roots: ${err instanceof Error ? err.message : String(err)}`);
+        if (cancelled) {
+          void vscode.window.showInformationMessage("roots: codemap generation cancelled.");
+        } else {
+          void vscode.window.showErrorMessage(`roots: ${err instanceof Error ? err.message : String(err)}`);
+        }
       } finally {
         codemapsView?.clearProgress();
       }
@@ -165,7 +176,7 @@ async function selectModel(context: vscode.ExtensionContext): Promise<void> {
   const currentModel = cfg.get<string>("backend.model", "");
   const currentBaseUrl = cfg.get<string>("backend.baseUrl", "");
 
-  const choice = await ModelPickerPanel.pick(options, {
+  const choice = await pickModelQuick(options, {
     kind: currentKind,
     model: currentModel,
     baseUrl: currentBaseUrl,
@@ -187,17 +198,25 @@ async function selectModel(context: vscode.ExtensionContext): Promise<void> {
     const enteredUrl = await promptForBaseUrl(currentBaseUrl);
     if (!enteredUrl) return;
     baseUrl = enteredUrl;
+    // Only prefill the model if the current selection was already this custom
+    // endpoint; otherwise a stale preset model id (e.g. "deepseek-chat") would
+    // be suggested for an unrelated provider.
+    const modelPrefill = currentKind === option.kind && currentBaseUrl === baseUrl ? currentModel : "";
     const enteredModel = await vscode.window.showInputBox({
       prompt: "Model id for the custom endpoint (e.g. gpt-4o-mini)",
-      value: currentModel || "",
+      placeHolder: "gpt-4o-mini",
+      value: modelPrefill,
       ignoreFocusOut: true,
+      validateInput: (v) => (v.trim() === "" ? "A model id is required" : undefined),
     });
     if (!enteredModel || enteredModel.trim() === "") {
       void vscode.window.showWarningMessage("roots: a model id is required for a custom endpoint.");
       return;
     }
     model = enteredModel.trim();
-    option = { ...option, baseUrl };
+    // Mark this as a custom endpoint so the key is stored/looked up by URL and
+    // the label reflects the real endpoint rather than the generic preset.
+    option = { ...option, baseUrl, customEndpoint: true, label: baseUrl, defaultModel: model };
   }
 
   if (choice.requiresApiKey) {
@@ -213,6 +232,100 @@ async function selectModel(context: vscode.ExtensionContext): Promise<void> {
   await cfg.update("backend.baseUrl", baseUrl ?? "", vscode.ConfigurationTarget.Workspace);
   await refreshCodemaps();
   void vscode.window.showInformationMessage(`roots: using ${option.label} · ${model}`);
+}
+
+/**
+ * Select a backend directly from the Models panel ("Use this backend"). Uses
+ * the backend's default model. For custom endpoints, defers to the full
+ * selectModel flow (which prompts for URL + model id). Prompts for an API key
+ * only when required.
+ */
+async function useBackend(context: vscode.ExtensionContext, option: BackendOption): Promise<void> {
+  if (option.customEndpoint) {
+    await selectModel(context);
+    return;
+  }
+
+  const baseUrl = option.baseUrl;
+  const model = option.defaultModel;
+
+  if (option.requiresApiKey) {
+    const key = await resolveApiKey(context, { ...option, baseUrl }, { allowReplace: true });
+    if (!key) {
+      void vscode.window.showWarningMessage(`roots: ${option.label} needs an API key to be used.`);
+      return;
+    }
+  }
+
+  const cfg = vscode.workspace.getConfiguration("roots");
+  await cfg.update("backend.kind", option.kind, vscode.ConfigurationTarget.Workspace);
+  await cfg.update("backend.model", model, vscode.ConfigurationTarget.Workspace);
+  await cfg.update("backend.baseUrl", baseUrl ?? "", vscode.ConfigurationTarget.Workspace);
+  await refreshCodemaps();
+  void vscode.window.showInformationMessage(`roots: using ${option.label} · ${model}`);
+}
+
+/**
+ * A searchable modal (native QuickPick) for choosing an inference model:
+ * every provider's models are grouped under a separator and listed together,
+ * so picking a row resolves the backend + model in one action. Runs as an
+ * overlay rather than an editor tab.
+ */
+async function pickModelQuick(
+  options: BackendOption[],
+  current: CurrentSelection
+): Promise<ModelChoice | undefined> {
+  type Row = vscode.QuickPickItem & { choice?: ModelChoice };
+  const items: Row[] = [];
+
+  for (const option of options) {
+    if (option.customEndpoint) continue;
+    items.push({ label: option.label, kind: vscode.QuickPickItemKind.Separator });
+    const models = option.models?.length ? option.models : [{ id: option.defaultModel, label: option.defaultModel }];
+    for (const m of models) {
+      const isCurrent =
+        option.kind === current.kind &&
+        (option.baseUrl ?? "") === (current.baseUrl ?? "") &&
+        m.id === current.model;
+      items.push({
+        label: `${isCurrent ? "$(check) " : ""}${m.label}`,
+        description: option.requiresApiKey ? "API key" : option.mode === "local" ? "local" : "cloud",
+        detail: m.note ? `${m.id} · ${m.note}` : m.id,
+        choice: {
+          kind: option.kind,
+          baseUrl: option.baseUrl,
+          model: m.id,
+          requiresApiKey: option.requiresApiKey,
+        },
+      });
+    }
+  }
+
+  // Custom OpenAI-compatible endpoint entry (prompts for URL + model id later).
+  const custom = options.find((o) => o.customEndpoint);
+  if (custom) {
+    items.push({ label: "Other", kind: vscode.QuickPickItemKind.Separator });
+    items.push({
+      label: "$(add) Custom OpenAI-compatible endpoint…",
+      detail: "Bring your own base URL and model id",
+      choice: {
+        kind: custom.kind,
+        baseUrl: custom.baseUrl,
+        model: custom.defaultModel,
+        requiresApiKey: custom.requiresApiKey,
+        customEndpoint: true,
+      },
+    });
+  }
+
+  const picked = await vscode.window.showQuickPick(items, {
+    title: "roots — Choose a model",
+    placeHolder: "Search models or providers…",
+    matchOnDescription: true,
+    matchOnDetail: true,
+    ignoreFocusOut: true,
+  });
+  return picked?.choice;
 }
 
 /**
@@ -249,10 +362,23 @@ async function pickBackend(context: vscode.ExtensionContext): Promise<BackendCon
 
   // A saved custom endpoint won't match any preset (presets have no baseUrl or a
   // different one). Reconstruct it from config so previously-chosen custom
-  // providers keep working without re-prompting.
+  // providers keep working without re-prompting. Preserve customEndpoint so the
+  // API key is stored/looked up by URL, and carry the saved model as default.
   if (!option && savedKind && savedBaseUrl) {
     const custom = options.find((o) => o.customEndpoint);
-    option = { ...(custom ?? { kind: savedKind as BackendOption["kind"], label: savedBaseUrl, description: "Custom · OpenAI-compatible", mode: "cloud", requiresApiKey: true, defaultModel: savedModel }), baseUrl: savedBaseUrl };
+    option = {
+      ...(custom ?? {
+        kind: savedKind as BackendOption["kind"],
+        description: "Custom · OpenAI-compatible",
+        mode: "cloud",
+        requiresApiKey: true,
+      }),
+      label: savedBaseUrl,
+      baseUrl: savedBaseUrl,
+      defaultModel: savedModel,
+      customEndpoint: true,
+      requiresApiKey: true,
+    };
   }
 
   if (!option) {
@@ -345,14 +471,37 @@ async function resolveApiKey(
  */
 async function setApiKey(context: vscode.ExtensionContext): Promise<void> {
   if (!engine) return;
-  const options = (await engine.listBackends()).filter((o) => o.requiresApiKey && !o.customEndpoint);
+  const all = await engine.listBackends();
+  const presets = all.filter((o) => o.requiresApiKey && !o.customEndpoint);
   const cfg = vscode.workspace.getConfiguration("roots");
+  const savedKind = cfg.get<string>("backend.kind", "");
   const savedBaseUrl = cfg.get<string>("backend.baseUrl", "");
 
-  const picked = await vscode.window.showQuickPick(
-    options.map((o) => ({ label: o.label, description: o.description, option: o })),
-    { placeHolder: "Set API key for which provider?" }
-  );
+  type Row = vscode.QuickPickItem & { option: BackendOption };
+  const items: Row[] = presets.map((o) => ({ label: o.label, description: o.description, option: o }));
+
+  // If a custom endpoint is currently configured, offer it here too so its
+  // (possibly wrong) BYOK key can be replaced or removed.
+  const isCustomConfigured = savedBaseUrl && !presets.some((o) => (o.baseUrl ?? "") === savedBaseUrl);
+  if (isCustomConfigured) {
+    const custom = all.find((o) => o.customEndpoint);
+    items.unshift({
+      label: `$(globe) Custom endpoint`,
+      description: savedBaseUrl,
+      option: {
+        ...(custom ?? { kind: savedKind as BackendOption["kind"], description: "Custom · OpenAI-compatible", mode: "cloud" }),
+        label: savedBaseUrl,
+        baseUrl: savedBaseUrl,
+        defaultModel: cfg.get<string>("backend.model", ""),
+        requiresApiKey: true,
+        customEndpoint: true,
+      },
+    });
+  }
+
+  const picked = await vscode.window.showQuickPick(items, {
+    placeHolder: "Set API key for which provider?",
+  });
   if (!picked) return;
 
   const option = picked.option;

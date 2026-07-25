@@ -202,6 +202,20 @@ export class EngineClient {
     return this.call("askCodemap", args);
   }
 
+  /**
+   * Abort any in-flight work by killing the engine subprocess. Pending calls
+   * reject with a cancellation error and the process auto-restarts on the next
+   * request. The engine's agent loop runs server-side with no cancel RPC, so
+   * terminating the process is the reliable way to stop it immediately.
+   */
+  cancelActiveWork(): void {
+    if (!this.proc || this.proc.killed) return;
+    for (const [, p] of this.pending) p.reject(new Error("Cancelled"));
+    this.pending.clear();
+    this.proc.kill();
+    this.proc = null;
+  }
+
   dispose(): void {
     this.proc?.kill();
     this.proc = null;

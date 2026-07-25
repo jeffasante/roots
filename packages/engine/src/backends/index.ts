@@ -82,11 +82,11 @@ export const BACKEND_OPTIONS: BackendOption[] = [
     description: "Cloud · OpenAI-compatible · DeepSeek API key",
     mode: "cloud",
     requiresApiKey: true,
-    defaultModel: "deepseek-chat",
-    baseUrl: "https://api.deepseek.com/v1",
+    defaultModel: "deepseek-v4-flash",
+    baseUrl: "https://api.deepseek.com",
     models: [
-      { id: "deepseek-chat", label: "DeepSeek V3 (chat)", note: "general · recommended" },
-      { id: "deepseek-reasoner", label: "DeepSeek R1 (reasoner)", note: "reasoning · slower" },
+      { id: "deepseek-v4-flash", label: "DeepSeek V4 Flash", note: "fast · recommended" },
+      { id: "deepseek-v4-pro", label: "DeepSeek V4 Pro", note: "highest quality · slower" },
     ],
   },
   {

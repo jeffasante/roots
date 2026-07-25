@@ -46,6 +46,8 @@ interface CodemapGraph {
 
 interface CodemapsViewHandlers {
   generate(query: string): Promise<void>;
+  /** Cancel an in-flight codemap generation. */
+  cancelGenerate(): void;
   open(codemap: Codemap): void;
   quiz(codemap: Codemap): void;
   delete(codemap: Codemap): Promise<void>;
@@ -125,6 +127,8 @@ export class CodemapsViewProvider implements vscode.WebviewViewProvider {
           void this.handlers.toggleFavorite(message.id).then(() => this.render());
         } else if (message.type === "selectModel") {
           void this.handlers.selectModel();
+        } else if (message.type === "stop") {
+          this.handlers.cancelGenerate();
         } else if (message.type === "refresh") {
           void this.handlers.refresh();
         } else if (message.type === "suggest") {
@@ -215,7 +219,9 @@ export class CodemapsViewProvider implements vscode.WebviewViewProvider {
       progress.phase === "synthesis" ? "Synthesizing codemap" : progress.message || "Researching the repository";
     const detail = progress.detail && progress.detail !== progress.file ? progress.detail : "";
     return `<section class="progress-card">
-      <div class="progress-head"><span class="spinner"></span><strong>Generating codemap</strong><span class="progress-step">${escapeHtml(step)}</span></div>
+      <div class="progress-head"><span class="spinner"></span><strong>Generating codemap</strong><span class="progress-step">${escapeHtml(step)}</span>
+        <button class="progress-stop" data-stop title="Stop generation">${ICON.stop}<span>Stop</span></button>
+      </div>
       <div class="progress-query">${escapeHtml(this.generatingQuery)}</div>
       <div class="progress-activity">${escapeHtml(activity)}</div>
       ${file ? `<div class="progress-file">${ICON.file}<span>${escapeHtml(file)}</span></div>` : ""}
@@ -323,6 +329,9 @@ export class CodemapsViewProvider implements vscode.WebviewViewProvider {
   .progress-card { margin-top:17px; padding:12px; border:1px solid var(--border); border-radius:6px; background:var(--vscode-sideBarSectionHeader-background); }
   .progress-head { display:flex; align-items:center; gap:8px; }
   .progress-step { margin-left:auto; font-size:11px; color:var(--muted); font-weight:400; }
+  .progress-stop { display:inline-flex; align-items:center; gap:4px; padding:2px 8px; font-size:11px; font-weight:500; color:var(--vscode-foreground); background:transparent; border:1px solid var(--border); border-radius:4px; cursor:pointer; }
+  .progress-stop:hover { background:var(--vscode-toolbar-hoverBackground); border-color:var(--vscode-focusBorder); }
+  .progress-stop svg { width:12px; height:12px; }
   .spinner { width:14px; height:14px; border:2px solid var(--border); border-top-color:var(--accent); border-radius:50%; animation:spin .8s linear infinite; }
   .progress-query { margin:8px 0; color:var(--muted); line-height:1.35; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
   .progress-activity { font-size:12px; color:var(--vscode-foreground); line-height:1.4; }
@@ -630,6 +639,7 @@ export class CodemapsViewProvider implements vscode.WebviewViewProvider {
   if (uiState.query) query.value = uiState.query;
   query.addEventListener('input', () => saveState({ query: query.value }));
   document.getElementById('generate').addEventListener('click', () => vscode.postMessage({ type:'generate', query:query.value }));
+  document.querySelector('[data-stop]')?.addEventListener('click', () => vscode.postMessage({ type:'stop' }));
   document.getElementById('model').addEventListener('click', () => vscode.postMessage({ type:'selectModel' }));
   let selectedIntensity = document.querySelector('.intensity-opt[aria-pressed="true"]')?.dataset.intensity || 'intermediate';
   document.getElementById('suggest').addEventListener('click', () => vscode.postMessage({ type:'suggest', intensity:selectedIntensity }));
@@ -1240,6 +1250,7 @@ const ICON = {
   chevron: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>`,
   quiz: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>`,
   file: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>`,
+  stop: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>`,
   back: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>`,
   expand: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/></svg>`,
   chat: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/></svg>`,
