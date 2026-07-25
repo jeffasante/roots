@@ -21,6 +21,20 @@ export interface QuizOptions {
   requireSymbolEvidence?: boolean;
 }
 
+/** A request to grade a user's recall attempt against the verified trace. */
+export interface GradeRequest {
+  codemap: Codemap;
+  prompt: string;
+  verifiedAnswer: string;
+  userAnswer: string;
+}
+
+/** The model's verdict on a recall attempt. */
+export interface GradeResult {
+  score: "missed" | "partial" | "recalled";
+  feedback: string;
+}
+
 const DEFAULT_GROUNDING_THRESHOLD = 0.6;
 
 /**
@@ -69,12 +83,20 @@ function questionFromTrace(trace: Trace): Question {
 export class QuizPanel {
   private static current: QuizPanel | undefined;
   private static extensionUri: vscode.Uri | undefined;
+  /** Grades a free-text attempt against the verified trace via the model. */
+  private static grader: ((args: GradeRequest) => Promise<GradeResult>) | undefined;
   private readonly panel: vscode.WebviewPanel;
   private disposables: vscode.Disposable[] = [];
+  private codemap: Codemap | undefined;
 
   /** Called once on activation so the panel can set its editor-tab icon. */
   static configure(extensionUri: vscode.Uri): void {
     QuizPanel.extensionUri = extensionUri;
+  }
+
+  /** Register the grading round-trip (model compares attempt vs. trace). */
+  static configureGrader(grader: (args: GradeRequest) => Promise<GradeResult>): void {
+    QuizPanel.grader = grader;
   }
 
   static show(codemap: Codemap): void {
@@ -109,11 +131,21 @@ export class QuizPanel {
     this.panel = panel;
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
     this.panel.webview.onDidReceiveMessage(
-      (msg: { type?: string; repoRoot?: string; location?: Location }) => {
+      (msg: {
+        type?: string;
+        repoRoot?: string;
+        location?: Location;
+        requestId?: number;
+        prompt?: string;
+        verifiedAnswer?: string;
+        userAnswer?: string;
+      }) => {
         if (msg?.type === "openLocation" && msg.repoRoot && msg.location) {
           void vscode.commands.executeCommand("roots.openLocation", msg.repoRoot, msg.location);
         } else if (msg?.type === "showBackends") {
           void vscode.commands.executeCommand("roots.showBackends");
+        } else if (msg?.type === "gradeAnswer" && typeof msg.requestId === "number") {
+          void this.grade(msg.requestId, msg.prompt ?? "", msg.verifiedAnswer ?? "", msg.userAnswer ?? "");
         }
       },
       null,
@@ -121,7 +153,35 @@ export class QuizPanel {
     );
   }
 
+  /** Run the model grader and post the verdict back to the webview. */
+  private async grade(requestId: number, prompt: string, verifiedAnswer: string, userAnswer: string): Promise<void> {
+    if (!QuizPanel.grader || !this.codemap) {
+      void this.panel.webview.postMessage({
+        type: "gradeResult",
+        requestId,
+        error: "Grading is unavailable.",
+      });
+      return;
+    }
+    try {
+      const result = await QuizPanel.grader({
+        codemap: this.codemap,
+        prompt,
+        verifiedAnswer,
+        userAnswer,
+      });
+      void this.panel.webview.postMessage({ type: "gradeResult", requestId, result });
+    } catch (err) {
+      void this.panel.webview.postMessage({
+        type: "gradeResult",
+        requestId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   private render(codemap: Codemap, questions: Question[]): void {
+    this.codemap = codemap;
     this.panel.title = `roots — Recall: ${codemap.query.slice(0, 32)}`;
     this.panel.webview.html = this.html(codemap, questions);
   }
@@ -153,9 +213,6 @@ export class QuizPanel {
     border-bottom: 1px solid var(--border);
     background: var(--vscode-editor-background);
   }
-  .title-row { display: flex; align-items: center; gap: 9px; }
-  .brand-icon { display: inline-flex; color: var(--accent); }
-  .brand-icon svg { width: 18px; height: 18px; display: block; }
   h1 { font-size: 0.98rem; font-weight: 600; margin: 0; }
   .meta {
     color: var(--muted); font-size: 0.78rem; margin-top: 4px;
@@ -167,12 +224,10 @@ export class QuizPanel {
     padding: 2px 9px; border: 1px solid var(--border); border-radius: 999px;
   }
   .link-btn {
-    display: inline-flex; align-items: center; gap: 5px;
     background: none; border: none; padding: 0; cursor: pointer;
-    color: var(--accent); font-size: 0.8rem; font-family: inherit;
+    color: var(--muted); font-size: 0.8rem; font-family: inherit;
   }
-  .link-btn:hover { text-decoration: underline; }
-  .link-icon { width: 13px; height: 13px; }
+  .link-btn:hover { color: var(--vscode-foreground); text-decoration: underline; }
   .content {
     max-width: 720px; margin: 0 auto;
     padding: 28px 18px 48px;
@@ -206,36 +261,37 @@ export class QuizPanel {
     border-radius: 8px; padding: 10px 12px;
   }
   .attempt textarea:focus {
-    outline: none; border-color: var(--accent);
+    outline: none; border-color: var(--vscode-focusBorder, var(--muted));
   }
   .attempt textarea:disabled { opacity: 0.7; cursor: default; }
 
-  /* Self-rating shown after reveal so the user grades their recall. */
-  .rating { margin-top: 16px; }
-  .rating[hidden] { display: none; }
-  .rating-label {
-    font-size: 0.72rem; font-weight: 600; letter-spacing: 0.04em;
-    text-transform: uppercase; color: var(--muted); margin-bottom: 8px;
+  /* The model's verdict on the submitted attempt. */
+  .verdict { margin-top: 16px; }
+  .verdict[hidden] { display: none; }
+  .verdict-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .verdict-badge {
+    font-size: 0.68rem; font-weight: 600; letter-spacing: 0.03em;
+    text-transform: uppercase; padding: 2px 9px;
+    border-radius: 999px; border: 1px solid transparent;
   }
-  .rating-row { display: flex; gap: 8px; flex-wrap: wrap; }
-  .rate {
-    display: inline-flex; align-items: center; gap: 6px;
-    font-size: 0.82rem; padding: 6px 12px;
-    border: 1px solid var(--border); border-radius: 999px;
-    background: transparent; color: var(--vscode-foreground); cursor: pointer;
+  .verdict-badge.missed {
+    color: var(--vscode-charts-red, #f85149);
+    border-color: color-mix(in srgb, var(--vscode-charts-red, #f85149) 40%, transparent);
+    background: color-mix(in srgb, var(--vscode-charts-red, #f85149) 10%, transparent);
   }
-  .rate:hover { background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,0.12)); }
-  .rate .dot { width: 8px; height: 8px; border-radius: 50%; }
-  .rate[data-score="missed"] .dot { background: var(--vscode-charts-red, #f85149); }
-  .rate[data-score="partial"] .dot { background: var(--vscode-charts-yellow, #d29922); }
-  .rate[data-score="recalled"] .dot { background: var(--vscode-charts-green, #3fb950); }
-  .rate.selected { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
-
-  .overlap-hint {
-    margin-top: 10px; font-size: 0.8rem; color: var(--muted);
+  .verdict-badge.partial {
+    color: var(--vscode-charts-yellow, #d29922);
+    border-color: color-mix(in srgb, var(--vscode-charts-yellow, #d29922) 40%, transparent);
+    background: color-mix(in srgb, var(--vscode-charts-yellow, #d29922) 10%, transparent);
   }
-  .overlap-hint[hidden] { display: none; }
-  .overlap-hint b { color: var(--vscode-foreground); font-weight: 600; }
+  .verdict-badge.recalled {
+    color: var(--vscode-charts-green, #3fb950);
+    border-color: color-mix(in srgb, var(--vscode-charts-green, #3fb950) 40%, transparent);
+    background: color-mix(in srgb, var(--vscode-charts-green, #3fb950) 10%, transparent);
+  }
+  .verdict-badge.grading { color: var(--muted); border-color: var(--border); }
+  .verdict-badge.error { color: var(--vscode-charts-red, #f85149); border-color: var(--border); }
+  .verdict-feedback { font-size: 0.9rem; color: var(--vscode-foreground); }
 
   .answer { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
   .answer[hidden] { display: none; }
@@ -266,7 +322,7 @@ export class QuizPanel {
     padding: 2px 7px; border: 1px solid var(--border);
     border-radius: 5px; cursor: pointer; background: transparent;
   }
-  .loc:hover { color: var(--accent); border-color: var(--accent); }
+  .loc:hover { color: var(--vscode-foreground); border-color: var(--muted); }
 
   .controls { display: flex; gap: 8px; margin-top: 18px; flex-wrap: wrap; }
   .btn {
@@ -277,9 +333,14 @@ export class QuizPanel {
   }
   .btn:hover { background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,0.12)); }
   .btn.primary {
-    border-color: var(--accent); color: var(--accent);
-    background: color-mix(in srgb, var(--accent) 10%, transparent);
+    border-color: var(--vscode-button-background);
+    color: var(--vscode-button-foreground);
+    background: var(--vscode-button-background);
   }
+  .btn.primary:hover {
+    background: var(--vscode-button-hoverBackground, var(--vscode-button-background));
+  }
+  .btn.primary:disabled { opacity: 0.6; cursor: default; }
   .btn[hidden] { display: none; }
   .done {
     text-align: center; color: var(--muted); font-size: 0.9rem; padding: 24px 0;
@@ -301,34 +362,22 @@ export class QuizPanel {
   .restart {
     display: inline-flex; align-items: center; gap: 6px;
     font-size: 0.82rem; padding: 6px 14px;
-    border: 1px solid var(--accent); border-radius: 7px;
-    background: color-mix(in srgb, var(--accent) 10%, transparent);
-    color: var(--accent); cursor: pointer;
+    border: 1px solid var(--vscode-button-background); border-radius: 7px;
+    background: var(--vscode-button-background);
+    color: var(--vscode-button-foreground); cursor: pointer;
   }
+  .restart:hover { background: var(--vscode-button-hoverBackground, var(--vscode-button-background)); }
   .katex { font-size: 1em; }
 </style>
 </head>
 <body>
   <div class="header">
     <div class="title">
-      <div class="title-row">
-        <span class="brand-icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/>
-            <path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/>
-            <path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/>
-            <path d="M12 18v-6"/>
-          </svg>
-        </span>
-        <h1>Active recall</h1>
-      </div>
+      <h1>Active recall</h1>
       <div class="meta">${escapeHtml(codemap.query)}</div>
     </div>
     <div class="header-right">
-      <button class="link-btn" id="show-models" title="View available models">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" class="link-icon"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
-        Models
-      </button>
+      <button class="link-btn" id="show-models" title="View available models">Models</button>
       <div class="progress" id="progress"></div>
     </div>
   </div>
@@ -337,41 +386,36 @@ export class QuizPanel {
     <div class="card" id="card">
       <div class="kicker" id="kicker">Question</div>
       <div class="prompt" id="prompt"></div>
-      <div class="recall-hint">Try to reconstruct the answer from memory, write it down, then reveal to compare.</div>
+      <div class="recall-hint">Reconstruct the answer from memory, then submit — roots grades it against the verified trace.</div>
 
       <div class="attempt" id="attempt">
         <div class="attempt-label">Your answer</div>
-        <textarea id="attempt-input" placeholder="Recall where this happens and why, then reveal to check yourself…" spellcheck="false"></textarea>
+        <textarea id="attempt-input" placeholder="Recall where this happens and why, then submit to be graded…" spellcheck="false"></textarea>
+      </div>
+
+      <div class="verdict" id="verdict" hidden>
+        <div class="verdict-head">
+          <span class="verdict-badge" id="verdict-badge"></span>
+          <span class="verdict-feedback" id="verdict-feedback"></span>
+        </div>
       </div>
 
       <div class="answer" id="answer" hidden>
         <div class="answer-label">roots' verified trace</div>
         <div class="answer-body" id="answer-body"></div>
         <div class="locs" id="locs"></div>
-        <div class="overlap-hint" id="overlap-hint" hidden></div>
-      </div>
-
-      <div class="rating" id="rating" hidden>
-        <div class="rating-label">How well did you recall it?</div>
-        <div class="rating-row">
-          <button class="rate" data-score="missed"><span class="dot"></span>Missed</button>
-          <button class="rate" data-score="partial"><span class="dot"></span>Partial</button>
-          <button class="rate" data-score="recalled"><span class="dot"></span>Recalled</button>
-        </div>
       </div>
 
       <div class="controls">
-        <button class="btn primary" id="reveal">Reveal answer</button>
+        <button class="btn primary" id="submit">Submit answer</button>
+        <button class="btn" id="reveal" hidden>Reveal trace</button>
         <button class="btn" id="next" hidden>Next question →</button>
       </div>
     </div>
     <div class="done" id="done" hidden>
       <div class="score-headline" id="score-headline">You've reviewed every verified trace.</div>
       <div class="score-tally" id="score-tally"></div>
-      <button class="restart" id="restart">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" class="link-icon"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
-        Review again
-      </button>
+      <button class="restart" id="restart">Review again</button>
     </div>
   </div>
 
@@ -388,11 +432,13 @@ export class QuizPanel {
       prompt: document.getElementById("prompt"),
       attempt: document.getElementById("attempt"),
       attemptInput: document.getElementById("attempt-input"),
+      verdict: document.getElementById("verdict"),
+      verdictBadge: document.getElementById("verdict-badge"),
+      verdictFeedback: document.getElementById("verdict-feedback"),
       answer: document.getElementById("answer"),
       answerBody: document.getElementById("answer-body"),
       locs: document.getElementById("locs"),
-      overlapHint: document.getElementById("overlap-hint"),
-      rating: document.getElementById("rating"),
+      submit: document.getElementById("submit"),
       reveal: document.getElementById("reveal"),
       next: document.getElementById("next"),
       progress: document.getElementById("progress"),
@@ -403,35 +449,17 @@ export class QuizPanel {
     };
 
     let index = 0;
-    // Per-question state: what the user typed and how they rated their recall.
-    const attempts = questions.map(() => ({ text: "", score: null }));
+    let requestSeq = 0;
+    let pendingRequest = null;
+    // Per-question state: the attempt text and the model's verdict.
+    const attempts = questions.map(() => ({ text: "", score: null, feedback: "" }));
 
-    // Rough keyword overlap between the user's answer and the verified trace,
-    // used only as a nudge — the user makes the final call via the rating row.
-    const STOP = new Set(["the","a","an","and","or","of","to","in","is","are","it","this","that","for","on","with","as","at","by","be","from","into","its","where","when","how","does","do"]);
-    function keywords(text) {
-      return new Set(
-        String(text || "")
-          .toLowerCase()
-          .replace(/[^a-z0-9_\\s]/g, " ")
-          .split(/\\s+/)
-          .filter((w) => w.length > 2 && !STOP.has(w))
-      );
-    }
-    function overlapRatio(userText, answerText) {
-      const user = keywords(userText);
-      const target = keywords(answerText);
-      if (target.size === 0 || user.size === 0) return 0;
-      let hit = 0;
-      for (const w of target) if (user.has(w)) hit += 1;
-      return hit / target.size;
-    }
+    const SCORE_LABEL = { missed: "Missed", partial: "Partial", recalled: "Recalled" };
 
     function confBadge(c) {
       if (!c) return "";
-      let cls, text;
-      if (c.location_evidence === "symbol") { cls = "conf conf-verified"; text = "verified"; }
-      else { cls = "conf conf-located"; text = "located"; }
+      const text = c.location_evidence === "symbol" ? "verified" : "located";
+      const cls = c.location_evidence === "symbol" ? "conf conf-verified" : "conf conf-located";
       let grounded = "";
       if (typeof c.summary_grounded === "number") {
         grounded = ' <span class="conf-grounded">' + Math.round(c.summary_grounded * 100) + '% grounded</span>';
@@ -456,55 +484,99 @@ export class QuizPanel {
         els.locs.appendChild(b);
       }
 
-      // Restore any prior attempt for this question.
-      els.attemptInput.value = attempts[index].text;
-      els.attemptInput.disabled = false;
+      const prior = attempts[index];
+      els.attemptInput.value = prior.text;
+      els.attemptInput.disabled = prior.score !== null;
       els.attempt.hidden = false;
-      els.answer.hidden = true;
-      els.overlapHint.hidden = true;
-      els.rating.hidden = true;
-      for (const r of els.rating.querySelectorAll(".rate")) r.classList.remove("selected");
-      els.reveal.hidden = false;
-      els.next.hidden = true;
+
+      if (prior.score !== null) {
+        // Returning to an already-graded question: restore its verdict.
+        showVerdict(prior.score, prior.feedback);
+        els.answer.hidden = false;
+        els.submit.hidden = true;
+        els.reveal.hidden = true;
+        els.next.hidden = false;
+      } else {
+        els.verdict.hidden = true;
+        els.answer.hidden = true;
+        els.submit.hidden = false;
+        els.submit.disabled = false;
+        els.submit.textContent = "Submit answer";
+        els.reveal.hidden = false;
+        els.next.hidden = true;
+      }
+
       els.progress.textContent = (index + 1) + " / " + questions.length;
+      renderMath();
+    }
+
+    function showVerdict(score, feedback) {
+      els.verdictBadge.className = "verdict-badge " + score;
+      els.verdictBadge.textContent = SCORE_LABEL[score] || score;
+      els.verdictFeedback.textContent = feedback || "";
+      els.verdict.hidden = false;
+    }
+
+    function submit() {
+      const text = els.attemptInput.value;
+      attempts[index].text = text;
+      els.attemptInput.disabled = true;
+      els.submit.disabled = true;
+      els.submit.textContent = "Grading…";
+      els.verdictBadge.className = "verdict-badge grading";
+      els.verdictBadge.textContent = "Grading";
+      els.verdictFeedback.textContent = "roots is comparing your answer to the verified trace…";
+      els.verdict.hidden = false;
+
+      requestSeq += 1;
+      pendingRequest = requestSeq;
+      vscodeApi.postMessage({
+        type: "gradeAnswer",
+        requestId: requestSeq,
+        prompt: questions[index].prompt,
+        verifiedAnswer: questions[index].answer,
+        userAnswer: text,
+      });
+    }
+
+    function onGradeResult(msg) {
+      // Ignore stale replies (user moved on before grading returned).
+      if (msg.requestId !== pendingRequest) return;
+      pendingRequest = null;
+
+      if (msg.error) {
+        els.verdictBadge.className = "verdict-badge error";
+        els.verdictBadge.textContent = "Error";
+        els.verdictFeedback.textContent = msg.error;
+        els.submit.disabled = false;
+        els.submit.textContent = "Retry";
+        els.attemptInput.disabled = false;
+        return;
+      }
+
+      const score = msg.result.score;
+      const feedback = msg.result.feedback;
+      attempts[index].score = score;
+      attempts[index].feedback = feedback;
+      showVerdict(score, feedback);
+
+      // Grading is authoritative — reveal the trace and move on.
+      els.answer.hidden = false;
+      els.submit.hidden = true;
+      els.reveal.hidden = true;
+      els.next.hidden = false;
+      els.next.focus();
       renderMath();
     }
 
     function reveal() {
       attempts[index].text = els.attemptInput.value;
-      els.attemptInput.disabled = true;
-
       els.answer.hidden = false;
-      els.rating.hidden = false;
       els.reveal.hidden = true;
-      els.next.hidden = false;
-
-      // Show an overlap nudge and pre-suggest a rating the user can override.
-      const ratio = overlapRatio(attempts[index].text, questions[index].answer);
-      if (attempts[index].text.trim().length > 0) {
-        const pct = Math.round(ratio * 100);
-        els.overlapHint.innerHTML =
-          "Your answer shares <b>" + pct + "%</b> of the trace's key terms.";
-        els.overlapHint.hidden = false;
-        const suggested = ratio >= 0.6 ? "recalled" : ratio >= 0.25 ? "partial" : "missed";
-        setRating(suggested, false);
-      } else {
-        els.overlapHint.hidden = true;
-      }
       renderMath();
     }
 
-    function setRating(score, fromClick) {
-      attempts[index].score = score;
-      for (const r of els.rating.querySelectorAll(".rate")) {
-        r.classList.toggle("selected", r.dataset.score === score);
-      }
-      if (fromClick) els.next.focus();
-    }
-
     function next() {
-      // Default an un-rated question to "missed" so the tally stays honest.
-      if (attempts[index].score === null) attempts[index].score = "missed";
       index += 1;
       if (index >= questions.length) {
         renderDone();
@@ -519,11 +591,17 @@ export class QuizPanel {
       els.progress.textContent = questions.length + " / " + questions.length;
 
       const counts = { recalled: 0, partial: 0, missed: 0 };
-      for (const a of attempts) counts[a.score || "missed"] += 1;
-      const total = questions.length;
+      let graded = 0;
+      for (const a of attempts) {
+        if (a.score === null) continue;
+        counts[a.score] += 1;
+        graded += 1;
+      }
       const scored = counts.recalled + counts.partial * 0.5;
-      const pct = total ? Math.round((scored / total) * 100) : 0;
-      els.scoreHeadline.textContent = "Recall score: " + pct + "%";
+      const pct = graded ? Math.round((scored / graded) * 100) : 0;
+      els.scoreHeadline.textContent = graded
+        ? "Recall score: " + pct + "%"
+        : "You've reviewed every verified trace.";
 
       const items = [
         { key: "recalled", label: "Recalled" },
@@ -543,7 +621,8 @@ export class QuizPanel {
 
     function restart() {
       index = 0;
-      for (const a of attempts) { a.text = ""; a.score = null; }
+      pendingRequest = null;
+      for (const a of attempts) { a.text = ""; a.score = null; a.feedback = ""; }
       els.done.hidden = true;
       els.card.hidden = false;
       loadQuestion();
@@ -559,19 +638,24 @@ export class QuizPanel {
       });
     }
 
+    els.submit.addEventListener("click", submit);
     els.reveal.addEventListener("click", reveal);
     els.next.addEventListener("click", next);
     els.restart.addEventListener("click", restart);
-    for (const r of els.rating.querySelectorAll(".rate")) {
-      r.addEventListener("click", () => setRating(r.dataset.score, true));
-    }
-    // Ctrl/Cmd+Enter reveals from the textarea for a keyboard-driven flow.
+
+    // Ctrl/Cmd+Enter submits from the textarea for a keyboard-driven flow.
     els.attemptInput.addEventListener("keydown", (e) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && !els.reveal.hidden) {
+      if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && !els.submit.hidden && !els.submit.disabled) {
         e.preventDefault();
-        reveal();
+        submit();
       }
     });
+
+    window.addEventListener("message", (event) => {
+      const msg = event.data;
+      if (msg && msg.type === "gradeResult") onGradeResult(msg);
+    });
+
     document.getElementById("show-models").addEventListener("click", () => {
       vscodeApi.postMessage({ type: "showBackends" });
     });

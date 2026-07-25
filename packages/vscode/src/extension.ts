@@ -13,7 +13,7 @@ import {
 import { BackendsPanel } from "./webview/backendsPanel.js";
 import { CodemapsViewProvider } from "./webview/codemapsView.js";
 import { CodemapPanel } from "./webview/panel.js";
-import { QuizPanel } from "./webview/quizPanel.js";
+import { QuizPanel, type GradeRequest, type GradeResult } from "./webview/quizPanel.js";
 
 let engine: EngineClient | undefined;
 let codemapsView: CodemapsViewProvider | undefined;
@@ -26,6 +26,7 @@ export function activate(context: vscode.ExtensionContext): void {
   engine = new EngineClient(enginePath);
   CodemapPanel.configure((codemap, question) => askCodemap(context, codemap, question));
   QuizPanel.configure(context.extensionUri);
+  QuizPanel.configureGrader((args) => gradeQuizAnswer(context, args));
   const FAVORITES_KEY = "roots.favorites";
   const readFavorites = () => context.globalState.get<string[]>(FAVORITES_KEY, []);
   codemapsView = new CodemapsViewProvider({
@@ -416,6 +417,66 @@ async function askCodemap(
   const backend = await pickBackend(context);
   if (!backend) throw new Error("No inference backend configured.");
   return engine.askCodemap({ codemap, question, backend });
+}
+
+/**
+ * Grade a recall attempt: ask the configured model to compare the user's answer
+ * to roots' verified trace and return one of missed/partial/recalled plus a
+ * short piece of feedback. Runs through the same askCodemap round-trip.
+ */
+async function gradeQuizAnswer(
+  context: vscode.ExtensionContext,
+  args: GradeRequest
+): Promise<GradeResult> {
+  if (!engine) throw new Error("Engine not ready.");
+  const backend = await pickBackend(context);
+  if (!backend) throw new Error("No inference backend configured.");
+
+  const question =
+    "You are grading a developer's active-recall attempt against a verified trace from this codebase.\n\n" +
+    `Question: ${args.prompt}\n\n` +
+    `Verified answer (ground truth):\n${args.verifiedAnswer}\n\n` +
+    `The developer's answer:\n${args.userAnswer || "(left blank)"}\n\n` +
+    "Compare the developer's answer to the verified answer. Judge only whether they recalled the " +
+    "right place and mechanism — ignore wording and formatting. Reply with a single line of JSON and " +
+    'nothing else, in exactly this shape: {"score":"missed|partial|recalled","feedback":"one concise sentence"}. ' +
+    'Use "recalled" if they got the location and mechanism right, "partial" if they got some of it, ' +
+    '"missed" if it is blank or wrong.';
+
+  const { answer } = await engine.askCodemap({ codemap: args.codemap, question, backend });
+  return parseGrade(answer);
+}
+
+/** Tolerantly extract the grade verdict from the model's reply. */
+function parseGrade(raw: string): GradeResult {
+  const text = raw.trim();
+  const match = text.match(/\{[\s\S]*\}/);
+  if (match) {
+    try {
+      const parsed = JSON.parse(match[0]) as { score?: string; feedback?: string };
+      const score = normalizeScore(parsed.score);
+      if (score) return { score, feedback: (parsed.feedback ?? "").trim() || defaultFeedback(score) };
+    } catch {
+      // fall through to keyword scan
+    }
+  }
+  const score = normalizeScore(text) ?? "partial";
+  return { score, feedback: text.slice(0, 240) || defaultFeedback(score) };
+}
+
+function normalizeScore(value: string | undefined): GradeResult["score"] | undefined {
+  if (!value) return undefined;
+  const v = value.toLowerCase();
+  if (v.includes("recall")) return "recalled";
+  if (v.includes("miss")) return "missed";
+  if (v.includes("partial")) return "partial";
+  return undefined;
+}
+
+function defaultFeedback(score: GradeResult["score"]): string {
+  if (score === "recalled") return "You recalled the right place and mechanism.";
+  if (score === "partial") return "You got part of it — revisit the trace to fill the gaps.";
+  return "Not quite — study the verified trace and try again.";
 }
 
 async function openLocation(repoRoot: string, loc: Location): Promise<void> {
