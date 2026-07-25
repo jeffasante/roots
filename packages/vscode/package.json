@@ -5,6 +5,22 @@
   "version": "0.1.0",
   "publisher": "jeffasante",
   "license": "MIT",
+  "icon": "media/roots-icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jeffasante/roots.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jeffasante/roots/issues"
+  },
+  "homepage": "https://github.com/jeffasante/roots#readme",
+  "keywords": [
+    "codemap",
+    "code navigation",
+    "active recall",
+    "ai",
+    "onboarding"
+  ],
   "engines": {
     "vscode": "^1.85.0"
   },

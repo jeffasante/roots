@@ -1,0 +1,19 @@
+flowchart TD
+  subgraph Section1["1. Encoding Selection"]
+    t1a["1a: CLI encoding selection"]
+    t1b["1b: Metal storage dispatch"]
+  end
+  subgraph Section2["2. TurboQuant"]
+    t2a["2a: Compress during write"]
+  end
+  t1a -->|"dispatches to"| t1b
+  t1b -->|"if TurboQuant"| t2a
+  classDef phase1 fill:#26339F,stroke:#26339F,color:#FFFFFF;
+  classDef phase2 fill:#020C8D,stroke:#020C8D,color:#FFFFFF;
+  class t1a phase1;
+  class t1b phase1;
+  class t2a phase2;
+  classDef unverified stroke-dasharray:4 3,stroke:#EA3D27;
+  class t1b unverified;
+  classDef focus stroke:#F5A623,stroke-width:3px;
+  class t1a focus;
