@@ -65,6 +65,49 @@ A standalone preview harness lives in [`examples/preview-lab/index.html`](exampl
 Keeping the engine out-of-process isolates the "read your code" trust boundary and
 CPU-heavy work from the extension host, and leaves room for a Rust port + Zed adapter later.
 
+## Grounding suggestions with hub detection
+
+When roots suggests what to explore, a flat list of files is useless — it can't tell
+you *which* files matter or *where to start*, so you get vague guesses like "there are
+Python scripts that talk to Rust code." To fix that, the engine ranks files by how
+**central** they are before handing them to the model.
+
+The idea is **hub detection**. Treat the repo as a graph: every `import`/`require` is
+an arrow from one file to another. Files that many others import — a shared client, core
+logic, a main data structure — are the **hubs**; files nobody imports are leaves. So the
+engine:
+
+1. Scans the codebase for `import` / `require` statements.
+2. Builds a table of *who imports whom* — for each file, how many files import it.
+3. Takes the top ~6 most-imported files.
+4. Feeds those to the model as "these are the central files, start here" — so a
+   suggestion becomes "trace how `engineClient.ts` (imported by 9 files) drives the
+   flow" instead of a random grab-bag.
+
+Three things keep it honest:
+
+- **Barrel/type-only files are excluded.** `index.ts` re-export barrels and pure type
+  modules get imported by everyone but hold no behavior — ranking by raw count would
+  surface plumbing. They're filtered so behavioral files rank above `types.ts`.
+- **Cycle-safe by construction.** Import graphs loop (A imports B, B imports A), so the
+  engine computes a flat importer *count* with a self-import guard — no graph traversal,
+  no infinite loops.
+- **It's a hint, not a fact.** Hub ranking only shapes the *prompt*; it never becomes a
+  claim in the codemap output. Trustworthiness is a separate concern handled by the
+  `location_verified` / `summary_grounded` fields, which check every claim against the
+  real code before it's surfaced.
+
+In one line: roots figures out which files are *important* by counting how many files
+depend on them, so its suggestions point at real central code instead of guessing.
+
+> Languages today: TypeScript/JavaScript (`import` / `require`), Python (`import` /
+> `from … import`), and Rust (`use crate::` / `mod`). Each is a small `LanguageParser`
+> (import extraction + per-language barrel exclusion — `index.ts`, `__init__.py`,
+> `mod.rs`/`lib.rs`) dispatched by file extension, so adding Go or Java is one more
+> parser, not a rewrite. Resolution is a deliberately cheap module-token match, not full
+> `sys.path` / crate-tree / tsconfig resolution — hub ranking is a prompt hint, so
+> approximate matching is the right cost/accuracy trade.
+
 ## Backends
 
 Bring your own key. The engine ships a catalog the UI lists:

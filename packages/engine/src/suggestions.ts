@@ -177,38 +177,205 @@ export interface Hub {
   importers: number;
 }
 
-/** Extensions whose imports we can resolve to sibling files by relative path. */
-const GRAPHABLE_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
+/**
+ * Per-language import analysis. Each parser does the same conceptual job with
+ * different syntax, so hub ranking stays language-uniform and adding a new
+ * language (Go, Java, …) is one more entry in LANGUAGE_PARSERS — not a fourth
+ * copy of the ranking loop.
+ *
+ * Resolution is intentionally CHEAP and approximate: we don't fully resolve an
+ * import to a byte-accurate file (sys.path / crate trees / tsconfig paths).
+ * We reduce both imports and files to "module tokens" (a basename-ish key) and
+ * count token matches. That's consistent with hub ranking being a *hint*, not
+ * a verified fact — accuracy lives in the location_verified/summary_grounded
+ * path, not here.
+ */
+interface LanguageParser {
+  /** File extensions this parser handles (with the leading dot). */
+  extensions: string[];
+  /** Module tokens by which OTHER files could refer to this file. */
+  fileTokens(file: string): string[];
+  /** Module tokens this file imports (its dependencies). */
+  importTokens(content: string): string[];
+  /** True if the file is mostly re-exports or type declarations (low signal). */
+  isBarrelOrTypeOnly(file: string, content: string): boolean;
+}
 
-/** Matches `import ... from "x"`, `export ... from "x"`, and `require("x")`. */
-const IMPORT_SPECIFIER = /(?:from|require\()\s*['"]([^'"]+)['"]/g;
+/** The tail segment of a "/"-delimited path, lowercased, extension stripped. */
+function baseNameNoExt(file: string): string {
+  const base = file.slice(file.lastIndexOf("/") + 1).toLowerCase();
+  const dot = base.lastIndexOf(".");
+  return dot > 0 ? base.slice(0, dot) : base;
+}
+
+/** The directory name containing a file (used for index/__init__/mod files). */
+function parentDirName(file: string): string {
+  const parts = file.split("/");
+  return parts.length >= 2 ? parts[parts.length - 2].toLowerCase() : "";
+}
+
+const TS_JS_PARSER: LanguageParser = {
+  extensions: [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"],
+  fileTokens(file) {
+    // A barrel index refers to its directory name; every file refers to its base.
+    if (/\/index\.[cm]?[jt]sx?$/.test(file)) return [parentDirName(file), "index"];
+    return [baseNameNoExt(file)];
+  },
+  importTokens(content) {
+    const tokens: string[] = [];
+    // `import ... from "x"`, `export ... from "x"`, `require("x")`.
+    for (const m of content.matchAll(/(?:from|require\()\s*['"]([^'"]+)['"]/g)) {
+      const spec = m[1];
+      if (!spec.startsWith(".")) continue; // relative imports only (internal graph)
+      tokens.push(baseNameNoExt(spec.replace(/\/index$/, "")) || parentDirName(spec));
+    }
+    return tokens;
+  },
+  isBarrelOrTypeOnly(_file, content) {
+    const code = codeLines(content, ["//", "*", "/*"]);
+    if (code.length === 0) return true;
+    const reExports = code.filter((l) => /^export\s+.*\bfrom\b/.test(l) || /^export\s+\*/.test(l)).length;
+    if (reExports > 0 && reExports >= code.length * 0.5) return true; // mostly a barrel
+    const hasRuntime = code.some((l) => /\b(function|class)\b/.test(l) || /=>|\brequire\(/.test(l));
+    const hasTypeSurface = code.some((l) => /^(export\s+)?(type|interface|enum)\b/.test(l));
+    return hasTypeSurface && !hasRuntime;
+  },
+};
+
+const PYTHON_PARSER: LanguageParser = {
+  extensions: [".py"],
+  fileTokens(file) {
+    // `__init__.py` is Python's barrel: other modules import it by package name.
+    if (/\/__init__\.py$/.test(file)) return [parentDirName(file)];
+    return [baseNameNoExt(file)];
+  },
+  importTokens(content) {
+    const tokens: string[] = [];
+    for (const line of content.split("\n")) {
+      const trimmed = line.trim();
+      // `from x.y import z` / `from . import y` → the module segment being imported.
+      let m = /^from\s+([.\w]+)\s+import\b/.exec(trimmed);
+      if (m) {
+        const mod = m[1].replace(/^\.+/, ""); // strip leading relative dots
+        const tail = mod.split(".").filter(Boolean).pop();
+        if (tail) tokens.push(tail.toLowerCase());
+        continue;
+      }
+      // `import x.y.z` → last segment.
+      m = /^import\s+([.\w]+)/.exec(trimmed);
+      if (m) {
+        const tail = m[1].split(".").filter(Boolean).pop();
+        if (tail) tokens.push(tail.toLowerCase());
+      }
+    }
+    return tokens;
+  },
+  isBarrelOrTypeOnly(file, content) {
+    // A re-export `__init__.py`: mostly `from . import x` with no real bodies.
+    const code = codeLines(content, ["#"]);
+    if (code.length === 0) return true;
+    if (/\/__init__\.py$/.test(file)) {
+      const reExports = code.filter((l) => /^from\s+\.\S*\s+import\b/.test(l) || /^import\s+\./.test(l)).length;
+      if (reExports > 0 && reExports >= code.length * 0.6) return true;
+    }
+    return false; // Python has no separate "type-only" module concept
+  },
+};
+
+const RUST_PARSER: LanguageParser = {
+  extensions: [".rs"],
+  fileTokens(file) {
+    // `mod.rs`/`lib.rs`/`main.rs` are referred to by their directory/crate.
+    if (/\/(mod|lib|main)\.rs$/.test(file)) return [parentDirName(file)];
+    return [baseNameNoExt(file)];
+  },
+  importTokens(content) {
+    const tokens: string[] = [];
+    for (const line of content.split("\n")) {
+      const trimmed = line.trim();
+      // `use crate::a::b;` / `use super::foo::Bar;` → the module segment.
+      const use = /^(?:pub\s+)?use\s+((?:crate|super|self)::[\w:]+)/.exec(trimmed);
+      if (use) {
+        const segs = use[1].split("::").filter((s) => s && !["crate", "super", "self"].includes(s));
+        // The module tail (drop a trailing Type/fn name if it looks like an item).
+        const mod = segs.length >= 2 ? segs[segs.length - 2] : segs[segs.length - 1];
+        if (mod) tokens.push(mod.toLowerCase());
+        continue;
+      }
+      // `mod foo;` declares a child module file `foo.rs` or `foo/mod.rs`.
+      const decl = /^(?:pub\s+)?mod\s+(\w+)\s*;/.exec(trimmed);
+      if (decl) tokens.push(decl[1].toLowerCase());
+    }
+    return tokens;
+  },
+  isBarrelOrTypeOnly(file, content) {
+    const code = codeLines(content, ["//", "/*", "*"]);
+    if (code.length === 0) return true;
+    if (/\/(mod|lib)\.rs$/.test(file)) {
+      // A re-export module: mostly `pub use` / `pub mod` with no fn/struct bodies.
+      const reExports = code.filter((l) => /^pub\s+use\b/.test(l) || /^(pub\s+)?mod\s+\w+\s*;/.test(l)).length;
+      const hasBodies = code.some((l) => /\b(fn|struct|enum|impl|trait)\b/.test(l));
+      if (reExports > 0 && reExports >= code.length * 0.5 && !hasBodies) return true;
+    }
+    return false;
+  },
+};
+
+const LANGUAGE_PARSERS: LanguageParser[] = [TS_JS_PARSER, PYTHON_PARSER, RUST_PARSER];
+
+/** Strip blank lines and lines beginning with any of the given comment prefixes. */
+function codeLines(content: string, commentPrefixes: string[]): string[] {
+  return content
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l && !commentPrefixes.some((p) => l.startsWith(p)));
+}
+
+function parserForFile(file: string): LanguageParser | undefined {
+  const dot = file.lastIndexOf(".");
+  if (dot < 0) return undefined;
+  const ext = file.slice(dot).toLowerCase();
+  return LANGUAGE_PARSERS.find((p) => p.extensions.includes(ext));
+}
 
 /**
  * Rank the most-imported internal files ("hubs") to hint at what is
  * structurally central. Guards against the two classic failure modes:
- *   - Barrel/type-only files (index re-exports, pure type modules) are
- *     dropped so we surface behavior, not just where names live.
+ *   - Barrel/type-only files (index/__init__/mod re-exports, pure type
+ *     modules) are dropped so we surface behavior, not just where names live.
  *   - Only a flat importer COUNT is computed (no graph traversal), so import
  *     cycles cannot cause infinite loops.
  *
- * Scope is deliberately narrow: exact + relative TS/JS imports only. No
- * tsconfig path-alias or workspace resolution yet.
+ * CYCLE-SAFETY SCOPE: the safety above comes from *counting*, not from any
+ * graph property. If a future feature walks from a hub into its importers to
+ * build a connected-files subgraph, that traversal MUST carry its own visited
+ * set — the guarantee here does not transfer to graph walking.
+ *
+ * Resolution is a cheap per-language token match (see LanguageParser), not
+ * full module resolution; hub ranking is a prompt hint, never a trusted claim.
  */
 export function rankHubs(tools: Tools, sourceFiles: string[]): Hub[] {
-  const graphable = sourceFiles.filter((file) => GRAPHABLE_EXTENSIONS.some((ext) => file.endsWith(ext)));
+  const graphable = sourceFiles.filter((file) => parserForFile(file));
   if (graphable.length === 0) return [];
 
-  // Index every graphable file by the path forms an import could resolve to,
-  // so a relative specifier can be matched back to a real file.
-  const byResolvedPath = new Map<string, string>();
+  // Map each module token → the files that answer to it. Collisions across
+  // directories are accepted: this is an approximate importer count by design.
+  const filesByToken = new Map<string, string[]>();
   for (const file of graphable) {
-    for (const key of importKeysFor(file)) byResolvedPath.set(key, file);
+    const parser = parserForFile(file)!;
+    for (const token of parser.fileTokens(file)) {
+      if (!token) continue;
+      const bucket = filesByToken.get(token);
+      if (bucket) bucket.push(file);
+      else filesByToken.set(token, [file]);
+    }
   }
 
   const importerCount = new Map<string, number>();
   const barrelOrTypeOnly = new Set<string>();
 
   for (const file of graphable) {
+    const parser = parserForFile(file)!;
     let content: string;
     try {
       content = stripLineNumbers(tools.readFile(file).content);
@@ -216,17 +383,16 @@ export function rankHubs(tools: Tools, sourceFiles: string[]): Hub[] {
       continue;
     }
 
-    if (isBarrelOrTypeOnly(content)) barrelOrTypeOnly.add(file);
+    if (parser.isBarrelOrTypeOnly(file, content)) barrelOrTypeOnly.add(file);
 
-    const dir = file.includes("/") ? file.slice(0, file.lastIndexOf("/")) : "";
-    const resolved = new Set<string>();
-    for (const match of content.matchAll(IMPORT_SPECIFIER)) {
-      const spec = match[1];
-      if (!spec.startsWith(".")) continue; // skip package imports; relative only
-      const target = resolveRelative(dir, spec, byResolvedPath);
-      if (target && target !== file) resolved.add(target); // ignore self-imports
+    // Each importer contributes at most once per target file (dedupe targets).
+    const targets = new Set<string>();
+    for (const token of parser.importTokens(content)) {
+      for (const target of filesByToken.get(token) ?? []) {
+        if (target !== file) targets.add(target); // ignore self-imports
+      }
     }
-    for (const target of resolved) {
+    for (const target of targets) {
       importerCount.set(target, (importerCount.get(target) ?? 0) + 1);
     }
   }
@@ -238,59 +404,9 @@ export function rankHubs(tools: Tools, sourceFiles: string[]): Hub[] {
     .slice(0, 6);
 }
 
-/** The path forms a relative import could name this file by (with/without ext, index). */
-function importKeysFor(file: string): string[] {
-  const keys = [file];
-  const dot = file.lastIndexOf(".");
-  if (dot > file.lastIndexOf("/")) keys.push(file.slice(0, dot)); // drop extension
-  if (/\/index\.[cm]?[jt]sx?$/.test(file)) {
-    keys.push(file.replace(/\/index\.[cm]?[jt]sx?$/, "")); // dir -> its index file
-  }
-  return keys;
-}
-
-/** Resolve a relative specifier from `dir` against the known file index. */
-function resolveRelative(dir: string, spec: string, index: Map<string, string>): string | undefined {
-  const combined = dir ? `${dir}/${spec}` : spec;
-  const normalized = normalizePath(combined);
-  return (
-    index.get(normalized) ??
-    // TS commonly imports ".js" but the source file is ".ts"; try swapping.
-    index.get(normalized.replace(/\.js$/, ".ts")) ??
-    index.get(normalized.replace(/\.js$/, ".tsx")) ??
-    index.get(`${normalized}/index`)
-  );
-}
-
-/** Collapse "." and ".." segments in a POSIX-style path. */
-function normalizePath(p: string): string {
-  const out: string[] = [];
-  for (const seg of p.split("/")) {
-    if (seg === "" || seg === ".") continue;
-    if (seg === "..") out.pop();
-    else out.push(seg);
-  }
-  return out.join("/");
-}
-
-/**
- * A file is a "barrel or type-only" module if it is essentially just
- * re-exports or type declarations — high import count, low behavioral signal.
- */
+/** Back-compat: content-only barrel/type-only check via the TS/JS parser. */
 export function isBarrelOrTypeOnly(content: string): boolean {
-  const code = content
-    .split("\n")
-    .map((l) => l.trim())
-    .filter((l) => l && !l.startsWith("//") && !l.startsWith("*") && !l.startsWith("/*"));
-  if (code.length === 0) return true;
-
-  const reExports = code.filter((l) => /^export\s+.*\bfrom\b/.test(l) || /^export\s+\*/.test(l)).length;
-  if (reExports > 0 && reExports >= code.length * 0.5) return true; // mostly a barrel
-
-  // Type-only: has type/interface surface but no runtime function/class bodies.
-  const hasRuntime = code.some((l) => /\b(function|class)\b/.test(l) || /=>|\brequire\(/.test(l));
-  const hasTypeSurface = code.some((l) => /^(export\s+)?(type|interface|enum)\b/.test(l));
-  return hasTypeSurface && !hasRuntime;
+  return TS_JS_PARSER.isBarrelOrTypeOnly("x.ts", content);
 }
 
 function dedupe(items: string[]): string[] {

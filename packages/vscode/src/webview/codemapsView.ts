@@ -266,6 +266,10 @@ export class CodemapsViewProvider implements vscode.WebviewViewProvider {
   .generate:disabled { opacity:.55; cursor:default; }
   .section-head { display:flex; align-items:center; justify-content:space-between; margin:19px 0 9px; }
   .section-head h3 { margin:0; font-size:13px; font-weight:650; }
+  .section-toggle { display:inline-flex; align-items:center; gap:5px; padding:2px 4px 2px 0; border:0; background:transparent; color:var(--vscode-foreground); cursor:pointer; }
+  .section-toggle svg { width:13px; height:13px; color:var(--muted); transition:transform .15s ease; }
+  .section-toggle[aria-expanded="false"] svg { transform:rotate(-90deg); }
+  .suggestions-body[hidden] { display:none; }
   .count { color:var(--muted); font-size:11px; margin-left:6px; font-weight:400; }
   .empty { color:var(--muted); text-align:center; padding:42px 12px; }
   .intensity { display:inline-flex; width:auto; max-width:100%; gap:2px; margin:0 0 9px; padding:2px; border:1px solid var(--border); border-radius:6px; background:var(--vscode-editor-background); }
@@ -274,10 +278,18 @@ export class CodemapsViewProvider implements vscode.WebviewViewProvider {
   .intensity-opt[aria-pressed="true"] { background:var(--vscode-list-activeSelectionBackground); color:var(--vscode-list-activeSelectionForeground); }
   .intensity-opt:disabled { opacity:.5; cursor:default; }
   .suggestions { display:flex; flex-direction:column; gap:7px; }
-  .suggestion { width:100%; padding:10px 11px; text-align:left; color:var(--vscode-foreground); background:transparent; border:1px solid var(--border); border-radius:6px; cursor:pointer; }
-  .suggestion:hover { background:var(--vscode-list-hoverBackground); border-color:var(--vscode-focusBorder); }
-  .suggestion-title { display:block; font-weight:600; line-height:1.35; }
-  .suggestion-description { display:block; margin-top:3px; color:var(--muted); font-size:12px; line-height:1.35; }
+  .suggestion { width:100%; text-align:left; color:var(--vscode-foreground); background:transparent; border:1px solid var(--border); border-radius:6px; overflow:hidden; }
+  .suggestion:hover { border-color:var(--vscode-focusBorder); }
+  .suggestion-head { display:flex; align-items:flex-start; gap:8px; padding:9px 9px 9px 11px; cursor:pointer; }
+  .suggestion-head:hover, .suggestion.is-open .suggestion-head { background:var(--vscode-list-hoverBackground); }
+  .suggestion-head:focus-visible { outline:1px solid var(--vscode-focusBorder); outline-offset:-1px; }
+  .suggestion-title { flex:1; min-width:0; font-weight:600; line-height:1.35; }
+  .suggestion-chev { flex:none; display:inline-flex; align-items:center; justify-content:center; width:18px; height:18px; margin-top:1px; color:var(--muted); border-radius:4px; cursor:pointer; }
+  .suggestion-chev:hover { color:var(--vscode-foreground); background:var(--vscode-toolbar-hoverBackground); }
+  .suggestion-chev svg { width:13px; height:13px; transition:transform .15s ease; }
+  .suggestion.is-open .suggestion-chev svg { transform:rotate(180deg); }
+  .suggestion-description { margin:0; padding:0 11px 10px 11px; color:var(--muted); font-size:12px; line-height:1.4; }
+  .suggestion-description[hidden] { display:none; }
   .suggestion-state { padding:10px 2px; color:var(--muted); font-size:12px; }
   .mini-spinner { display:inline-block; width:11px; height:11px; margin-right:7px; border:2px solid var(--border); border-top-color:var(--accent); border-radius:50%; animation:spin .8s linear infinite; vertical-align:-1px; }
   .library-head { gap:8px; margin-bottom:7px; }
@@ -484,23 +496,25 @@ export class CodemapsViewProvider implements vscode.WebviewViewProvider {
     <button class="generate" id="generate" ${this.progress ? "disabled" : ""}>Generate</button>
   </div>
   ${progress}
-  <div class="section-head">
-    <h3>Suggestions from repository</h3>
+  <div class="section-head suggestions-head">
+    <button class="section-toggle" id="suggestions-toggle" aria-expanded="true" title="Collapse suggestions">${ICON.chevron}<h3>Suggestions from repository</h3></button>
     <button class="icon-btn" id="suggest" title="Ask ${escapeHtml(backend?.label || kind)} for new suggestions">${ICON.refresh}</button>
   </div>
-  <div class="intensity" role="group" aria-label="Suggestion difficulty" title="Filter suggestion difficulty">
-    ${INTENSITY_LEVELS.map(
-      (level) =>
-        `<button class="intensity-opt" data-intensity="${level.id}" aria-pressed="${
-          this.suggestionIntensity === level.id ? "true" : "false"
-        }" title="${level.hint}"${this.suggestionsLoading ? " disabled" : ""}>${level.label}</button>`,
-    ).join("")}
+  <div class="suggestions-body" id="suggestions-body">
+    <div class="intensity" role="group" aria-label="Suggestion difficulty" title="Filter suggestion difficulty">
+      ${INTENSITY_LEVELS.map(
+        (level) =>
+          `<button class="intensity-opt" data-intensity="${level.id}" aria-pressed="${
+            this.suggestionIntensity === level.id ? "true" : "false"
+          }" title="${level.hint}"${this.suggestionsLoading ? " disabled" : ""}>${level.label}</button>`,
+      ).join("")}
+    </div>
+    <section class="suggestions">
+      ${this.suggestionsLoading ? `<div class="suggestion-state"><span class="mini-spinner"></span>Asking the model...</div>` : suggestions}
+      ${!this.suggestionsLoading && this.suggestionsError ? `<div class="suggestion-state">${escapeHtml(this.suggestionsError)}</div>` : ""}
+      ${!this.suggestionsLoading && !this.suggestionsError && !suggestions ? `<div class="suggestion-state">Generate ideas based on this repository.</div>` : ""}
+    </section>
   </div>
-  <section class="suggestions">
-    ${this.suggestionsLoading ? `<div class="suggestion-state"><span class="mini-spinner"></span>Asking the model...</div>` : suggestions}
-    ${!this.suggestionsLoading && this.suggestionsError ? `<div class="suggestion-state">${escapeHtml(this.suggestionsError)}</div>` : ""}
-    ${!this.suggestionsLoading && !this.suggestionsError && !suggestions ? `<div class="suggestion-state">Generate ideas based on this repository.</div>` : ""}
-  </section>
   <div class="section-head library-head">
     <h3>Your Codemaps <span class="count">${this.codemaps.length}</span></h3>
     <div class="library-filter" role="group" aria-label="Filter codemaps">
@@ -610,9 +624,10 @@ export class CodemapsViewProvider implements vscode.WebviewViewProvider {
   private listScript(): string {
     return `
   const query = document.getElementById('query');
-  const previous = vscode.getState();
-  if (previous?.query) query.value = previous.query;
-  query.addEventListener('input', () => vscode.setState({ query: query.value }));
+  const uiState = vscode.getState() || {};
+  const saveState = (patch) => { Object.assign(uiState, patch); vscode.setState(uiState); };
+  if (uiState.query) query.value = uiState.query;
+  query.addEventListener('input', () => saveState({ query: query.value }));
   document.getElementById('generate').addEventListener('click', () => vscode.postMessage({ type:'generate', query:query.value }));
   document.getElementById('model').addEventListener('click', () => vscode.postMessage({ type:'selectModel' }));
   let selectedIntensity = document.querySelector('.intensity-opt[aria-pressed="true"]')?.dataset.intensity || 'intermediate';
@@ -665,11 +680,45 @@ export class CodemapsViewProvider implements vscode.WebviewViewProvider {
     applyLibraryFilter();
   });
 
-  for (const suggestion of document.querySelectorAll('.suggestion')) suggestion.addEventListener('click', () => {
-    query.value = suggestion.dataset.query;
-    vscode.setState({ query: query.value });
+  // Section-level collapse for the whole suggestions block.
+  const suggestionsToggle = document.getElementById('suggestions-toggle');
+  const suggestionsBody = document.getElementById('suggestions-body');
+  if (suggestionsToggle && suggestionsBody) {
+    const setSuggestionsOpen = (open) => {
+      suggestionsToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+      suggestionsToggle.title = open ? 'Collapse suggestions' : 'Expand suggestions';
+      suggestionsBody.hidden = !open;
+      saveState({ suggestionsCollapsed: !open });
+    };
+    if (uiState.suggestionsCollapsed) setSuggestionsOpen(false);
+    suggestionsToggle.addEventListener('click', () =>
+      setSuggestionsOpen(suggestionsToggle.getAttribute('aria-expanded') !== 'true'));
+  }
+
+  // Per-card: chevron toggles the description; title/body generates.
+  function generateFrom(card) {
+    query.value = card.dataset.query;
+    saveState({ query: query.value });
     query.focus();
-  });`;
+    query.scrollIntoView({ block:'nearest' });
+  }
+  for (const card of document.querySelectorAll('.suggestion')) {
+    const head = card.querySelector('.suggestion-head');
+    const chev = card.querySelector('.suggestion-chev');
+    const desc = card.querySelector('.suggestion-description');
+    const toggleDesc = () => {
+      const open = card.dataset.open !== 'true';
+      card.dataset.open = open ? 'true' : 'false';
+      card.classList.toggle('is-open', open);
+      if (desc) desc.hidden = !open;
+      if (chev) chev.title = open ? 'Hide description' : 'Show description';
+    };
+    chev?.addEventListener('click', (event) => { event.stopPropagation(); toggleDesc(); });
+    head?.addEventListener('click', () => generateFrom(card));
+    head?.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); generateFrom(card); }
+    });
+  }`;
   }
 
   private detailScript(): string {
@@ -1137,10 +1186,13 @@ function codemapCard(codemap: Codemap, favorite: boolean): string {
 }
 
 function suggestionCard(suggestion: CodemapSuggestion): string {
-  return `<button class="suggestion" data-query="${escapeHtml(suggestion.query)}">
-    <span class="suggestion-title">${escapeHtml(suggestion.title)}</span>
-    <span class="suggestion-description">${escapeHtml(suggestion.description)}</span>
-  </button>`;
+  return `<div class="suggestion" data-query="${escapeHtml(suggestion.query)}" data-open="false">
+    <div class="suggestion-head" role="button" tabindex="0">
+      <span class="suggestion-title">${escapeHtml(suggestion.title)}</span>
+      <span class="suggestion-chev" title="Show description">${ICON.chevron}</span>
+    </div>
+    <p class="suggestion-description" hidden>${escapeHtml(suggestion.description)}</p>
+  </div>`;
 }
 
 function escapeHtml(value: string): string {

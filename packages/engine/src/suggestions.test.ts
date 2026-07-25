@@ -121,3 +121,53 @@ test("rankHubs is cycle-safe (circular imports do not hang or self-count)", () =
     }
   );
 });
+
+test("rankHubs ranks a Python module by its importers", () => {
+  withRepo(
+    {
+      "pkg/core.py": "def run():\n    return 1\n",
+      "pkg/a.py": "from .core import run\nrun()\n",
+      "pkg/b.py": "from pkg.core import run\nrun()\n",
+      "pkg/c.py": "import core\ncore.run()\n",
+    },
+    (tools) => {
+      const hubs = rankHubs(tools, tools.findByName("*"));
+      const core = hubs.find((h) => h.file === "pkg/core.py");
+      assert.ok(core, "core.py should be ranked as a hub");
+      assert.equal(core!.importers, 3);
+    }
+  );
+});
+
+test("rankHubs excludes a re-export __init__.py (Python barrel)", () => {
+  withRepo(
+    {
+      "pkg/__init__.py": "from .service import Service\nfrom .model import Model\nfrom .util import helper\n",
+      "pkg/service.py": "class Service:\n    def handle(self):\n        return 1\n",
+      "pkg/a.py": "from pkg import Service\n",
+      "pkg/b.py": "from pkg import Service\n",
+    },
+    (tools) => {
+      const hubs = rankHubs(tools, tools.findByName("*"));
+      assert.ok(!hubs.some((h) => h.file === "pkg/__init__.py"), "__init__ barrel must be excluded");
+    }
+  );
+});
+
+test("rankHubs ranks a Rust module and excludes a pub-use mod.rs", () => {
+  withRepo(
+    {
+      "src/engine/mod.rs": "pub use self::runner::Runner;\npub mod runner;\n",
+      "src/engine/runner.rs": "pub struct Runner;\nimpl Runner {\n    pub fn run(&self) -> u32 { 1 }\n}\n",
+      "src/a.rs": "use crate::engine::runner::Runner;\nfn go() { Runner.run(); }\n",
+      "src/b.rs": "use crate::engine::runner::Runner;\nfn go2() { Runner.run(); }\n",
+    },
+    (tools) => {
+      const hubs = rankHubs(tools, tools.findByName("*"));
+      assert.ok(!hubs.some((h) => h.file === "src/engine/mod.rs"), "pub-use mod.rs must be excluded");
+      const runner = hubs.find((h) => h.file === "src/engine/runner.rs");
+      assert.ok(runner, "runner.rs should be ranked");
+      assert.ok(runner!.importers >= 2, "runner imported by a.rs and b.rs");
+    }
+  );
+});
