@@ -128,7 +128,33 @@ export async function askCodemap(
       citations: normalizeCitations(call.input.citations, tools),
     };
   }
-  return { answer: final.content.trim() || "I couldn't find an answer in this codebase.", citations: [] };
+  // Last resort: the model didn't return a recognizable answer envelope. Never
+  // surface the raw JSON tool-call to the user — unwrap it to plain prose if it
+  // still looks like one, otherwise show the text as-is.
+  return { answer: unwrapAnswerEnvelope(final.content), citations: [] };
+}
+
+/**
+ * Defensive: if a string is (or contains) a `{ "tool": "answer", "input": {
+ * "answer": "…" } }` envelope, return just the inner answer text. Guards
+ * against a raw tool-call JSON blob ever being rendered to the user as the
+ * answer body. Falls back to the trimmed input when no envelope is found.
+ */
+export function unwrapAnswerEnvelope(text: string): string {
+  const trimmed = (text ?? "").trim();
+  if (!trimmed) return "I couldn't find an answer in this codebase.";
+  const json = extractJson(trimmed);
+  if (json) {
+    try {
+      const obj = JSON.parse(json) as { tool?: string; input?: { answer?: unknown } };
+      if (obj?.tool === "answer" && typeof obj.input?.answer === "string" && obj.input.answer.trim()) {
+        return obj.input.answer.trim();
+      }
+    } catch {
+      /* not an envelope — fall through */
+    }
+  }
+  return trimmed;
 }
 
 function parseCall(raw: string): AskCall | null {
@@ -161,11 +187,34 @@ function normalizeCitations(raw: unknown, tools: Tools): AskCitation[] {
   return out;
 }
 
+/**
+ * Extract the first balanced top-level JSON object from a model response.
+ * Brace-counting (string- and escape-aware) so answer text that itself
+ * contains `{`/`}` doesn't truncate the object or drag in trailing prose the
+ * greedy indexOf/lastIndexOf approach would have swallowed.
+ */
 function extractJson(text: string): string | null {
   const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start < 0 || end <= start) return null;
-  return text.slice(start, end + 1);
+  if (start < 0) return null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  return null; // unbalanced — no complete object
 }
 
 function truncate(s: string, max: number): string {

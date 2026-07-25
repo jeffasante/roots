@@ -561,6 +561,7 @@ export class CodemapsViewProvider implements vscode.WebviewViewProvider {
   <div class="detail-head">
     <button class="back" id="back">${ICON.back}<span>Codemaps</span></button>
     <div class="detail-actions">
+      <button class="icon-btn" id="detail-model" title="Change model" aria-label="Change model">${ICON.cpu}</button>
       <button class="icon-btn" id="detail-chat" title="Ask a question" aria-label="Ask a question" aria-expanded="false">${ICON.chat}</button>
       <button class="icon-btn" id="open-editor" title="Open full map in editor">${ICON.expand}</button>
       <button class="icon-btn" id="detail-quiz" title="Quiz me">${ICON.quiz}</button>
@@ -729,6 +730,7 @@ export class CodemapsViewProvider implements vscode.WebviewViewProvider {
   document.getElementById('back').addEventListener('click', () => vscode.postMessage({ type:'back' }));
   document.getElementById('open-editor').addEventListener('click', () => vscode.postMessage({ type:'openEditor', id:'${id}' }));
   document.getElementById('detail-quiz').addEventListener('click', () => vscode.postMessage({ type:'quiz', id:'${id}' }));
+  document.getElementById('detail-model')?.addEventListener('click', () => vscode.postMessage({ type:'selectModel' }));
   // Accordion: open one section at a time; open the first section by default.
   const sections = Array.from(document.querySelectorAll('.section'));
   let expandedSectionId = null;
@@ -903,6 +905,20 @@ export class CodemapsViewProvider implements vscode.WebviewViewProvider {
   const pending = new Map();
   const baseNameOf = (p) => (p || '').split(/[\\\\/]/).pop() || p;
   const escapeText = (s) => { const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; };
+  // Defensive: never render a raw { "tool":"answer","input":{"answer":...} }
+  // envelope. If one leaks through (old codemap, odd backend), show the inner
+  // answer text instead of the JSON blob.
+  function unwrapAnswer(value) {
+    const text = String(value == null ? '' : value).trim();
+    if (!(text.startsWith('{') && text.includes('"answer"'))) return text;
+    try {
+      const obj = JSON.parse(text);
+      if (obj && obj.tool === 'answer' && obj.input && typeof obj.input.answer === 'string') {
+        return obj.input.answer.trim();
+      }
+    } catch (_e) { /* not an envelope */ }
+    return text;
+  }
   function renderMarkdown(value) {
     const blocks = [];
     let text = String(value == null ? '' : value).replace(/\\r\\n?/g, '\\n');
@@ -996,7 +1012,7 @@ export class CodemapsViewProvider implements vscode.WebviewViewProvider {
       return;
     }
     bubble.className = 'msg msg-assistant';
-    let html = '<div class="markdown">' + renderMarkdown(msg.answer) + '</div>';
+    let html = '<div class="markdown">' + renderMarkdown(unwrapAnswer(msg.answer)) + '</div>';
     const cites = Array.isArray(msg.citations) ? msg.citations : [];
     if (cites.length) {
       html += '<div class="cites">' + cites.map((c) =>
@@ -1238,6 +1254,7 @@ const ICON = {
   starFilled: `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 3.6a.6.6 0 0 1 1 0l2.3 4.7 5.2.8a.6.6 0 0 1 .3 1L16.9 14l.9 5.2a.6.6 0 0 1-.9.6L12 17.3l-4.6 2.5a.6.6 0 0 1-.9-.6l.9-5.2-3.8-3.7a.6.6 0 0 1 .3-1l5.2-.8Z"/></svg>`,
   trash: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M10 11v6M14 11v6"/></svg>`,
   search: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>`,
+  cpu: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"/></svg>`,
 } as const;
 
 /** Icon per view-mode tab (kept beside ICON so it can reference it). */
