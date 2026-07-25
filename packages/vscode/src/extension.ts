@@ -12,6 +12,7 @@ import {
 } from "./engineClient.js";
 import { BackendsPanel } from "./webview/backendsPanel.js";
 import { CodemapsViewProvider } from "./webview/codemapsView.js";
+import { ModelPickerPanel } from "./webview/modelPickerPanel.js";
 import { CodemapPanel } from "./webview/panel.js";
 import { QuizPanel, type GradeRequest, type GradeResult } from "./webview/quizPanel.js";
 
@@ -150,10 +151,10 @@ async function generateCodemap(context: vscode.ExtensionContext, requestedQuery?
 }
 
 /**
- * Active-model picker for the Codemaps toolbar (image-2 style). Two quick
- * steps — backend, then model — persisted to `roots.backend.*` so it becomes
- * the default for the next Generate. Reads back the current selection so the
- * dropdown reflects what's active.
+ * Active-model picker for the Codemaps toolbar (image-2 style). Opens a single
+ * searchable modal listing every provider's models together; picking a row
+ * resolves the backend + model in one action, persisted to `roots.backend.*`
+ * so it becomes the default for the next Generate.
  */
 async function selectModel(context: vscode.ExtensionContext): Promise<void> {
   if (!engine) return;
@@ -163,40 +164,43 @@ async function selectModel(context: vscode.ExtensionContext): Promise<void> {
   const currentModel = cfg.get<string>("backend.model", "");
   const currentBaseUrl = cfg.get<string>("backend.baseUrl", "");
 
-  const picked = await vscode.window.showQuickPick(
-    options.map((o) => ({
-      label: o.kind === currentKind && (o.baseUrl ?? "") === currentBaseUrl ? `$(check) ${o.label}` : o.label,
-      description: o.mode === "local" ? "local" : "cloud",
-      detail: `default model: ${o.defaultModel}${o.requiresApiKey ? " · API key required" : ""}`,
-      option: o,
-    })),
-    { placeHolder: "Select the backend roots should use" }
-  );
-  if (!picked) return;
-  let option: BackendOption = picked.option;
+  const choice = await ModelPickerPanel.pick(options, {
+    kind: currentKind,
+    model: currentModel,
+    baseUrl: currentBaseUrl,
+  });
+  if (!choice) return;
 
-  // Custom OpenAI-compatible endpoint: ask for the base URL, then treat it like
-  // any other preset from here on (key + model resolution keyed by this URL).
-  if (option.customEndpoint) {
-    const baseUrl = await promptForBaseUrl(currentBaseUrl);
-    if (!baseUrl) return;
+  // Resolve the full backend option so we can label messages and reuse presets.
+  let option =
+    options.find((o) => o.kind === choice.kind && (o.baseUrl ?? "") === (choice.baseUrl ?? "")) ??
+    options.find((o) => o.kind === choice.kind);
+  if (!option) return;
+
+  let baseUrl = choice.baseUrl ?? option.baseUrl;
+  let model = choice.model;
+
+  // Custom OpenAI-compatible endpoint: ask for the base URL + model id, since
+  // there's no preset to fall back on.
+  if (choice.customEndpoint) {
+    const enteredUrl = await promptForBaseUrl(currentBaseUrl);
+    if (!enteredUrl) return;
+    baseUrl = enteredUrl;
+    const enteredModel = await vscode.window.showInputBox({
+      prompt: "Model id for the custom endpoint (e.g. gpt-4o-mini)",
+      value: currentModel || "",
+      ignoreFocusOut: true,
+    });
+    if (!enteredModel || enteredModel.trim() === "") {
+      void vscode.window.showWarningMessage("roots: a model id is required for a custom endpoint.");
+      return;
+    }
+    model = enteredModel.trim();
     option = { ...option, baseUrl };
   }
 
-  const model = await chooseModel(option, {
-    currentKind,
-    currentModel,
-    currentBaseUrl,
-  });
-  if (model === undefined || model.trim() === "") {
-    if (option.customEndpoint) {
-      void vscode.window.showWarningMessage("roots: a model id is required for a custom endpoint.");
-    }
-    return;
-  }
-
-  if (option.requiresApiKey) {
-    const key = await resolveApiKey(context, option);
+  if (choice.requiresApiKey) {
+    const key = await resolveApiKey(context, { ...option, baseUrl });
     if (!key) {
       void vscode.window.showWarningMessage(`roots: ${option.label} needs an API key to be used.`);
       return;
@@ -205,7 +209,7 @@ async function selectModel(context: vscode.ExtensionContext): Promise<void> {
 
   await cfg.update("backend.kind", option.kind, vscode.ConfigurationTarget.Workspace);
   await cfg.update("backend.model", model, vscode.ConfigurationTarget.Workspace);
-  await cfg.update("backend.baseUrl", option.baseUrl ?? "", vscode.ConfigurationTarget.Workspace);
+  await cfg.update("backend.baseUrl", baseUrl ?? "", vscode.ConfigurationTarget.Workspace);
   await refreshCodemaps();
   void vscode.window.showInformationMessage(`roots: using ${option.label} · ${model}`);
 }
@@ -228,49 +232,6 @@ async function promptForBaseUrl(prefill: string): Promise<string | undefined> {
     },
   });
   return entered?.trim().replace(/\/+$/, "") || undefined;
-}
-
-/**
- * Resolve which model to use for a backend. If the backend ships a curated
- * `models` list (e.g. NVIDIA NIM), show a quick-pick of those plus a "Custom…"
- * escape hatch; otherwise fall back to a free-text input box.
- * Returns undefined if the user cancels.
- */
-async function chooseModel(
-  option: BackendOption,
-  current: { currentKind: string; currentModel: string; currentBaseUrl: string }
-): Promise<string | undefined> {
-  const isCurrentBackend =
-    option.kind === current.currentKind && (option.baseUrl ?? "") === current.currentBaseUrl;
-  const prefill = (isCurrentBackend && current.currentModel) || option.defaultModel;
-
-  if (option.models?.length) {
-    const CUSTOM = "$(edit) Custom model…";
-    const items: vscode.QuickPickItem[] = option.models.map((m) => ({
-      label: m.id === prefill ? `$(check) ${m.label}` : m.label,
-      description: m.id,
-      detail: m.note,
-    }));
-    items.push({ label: CUSTOM, description: "Enter any model id" });
-
-    const chosen = await vscode.window.showQuickPick(items, {
-      placeHolder: `Select a model for ${option.label}`,
-      matchOnDescription: true,
-      matchOnDetail: true,
-    });
-    if (!chosen) return undefined;
-    if (chosen.label !== CUSTOM) {
-      // description holds the raw model id
-      return chosen.description ?? prefill;
-    }
-    // fall through to custom input
-  }
-
-  return vscode.window.showInputBox({
-    prompt: `Model for ${option.label}`,
-    value: prefill,
-    ignoreFocusOut: true,
-  });
 }
 
 /** Backend picker: lists engine options, resolves model + API key (via SecretStorage). */
