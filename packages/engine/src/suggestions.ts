@@ -59,20 +59,21 @@ export async function suggestCodemaps(
   const response = await backend.chat({
     jsonMode: true,
     temperature: INTENSITY_TEMPERATURE[intensity],
-    maxTokens: 700,
+    maxTokens: 1600,
     messages: [
       {
         role: "system",
         content: `You suggest useful code flows for a developer to explore as codemaps.
 Return JSON only in this exact shape:
-{"suggestions":[{"title":"short title","description":"one concrete sentence","query":"detailed codemap generation prompt"}]}
+{"suggestions":[{"title":"short title","description":"2-3 sentence detailed explanation","query":"detailed codemap generation prompt"}]}
 Rules:
-- Return exactly 3 suggestions.
+- Return exactly 3 suggestions. Always return all 3, fully formed — never stop early.
 - Ground every suggestion in the actual code evidence provided (file headers, symbols, README). Do NOT describe the repo by its languages or folder names (never write things like "Python scripts in the scripts directory" or "the Rust code").
 - Each suggestion must name at least one concrete file path and one real function, class, or symbol taken from the evidence, and describe a specific runtime behavior or data flow through it.
 - Prefer the "structurally central files" as starting points when they fit — they are the most-imported modules and usually anchor the important flows. This is a hint, not a requirement.
 - Prefer flows a developer would actually want to trace: how a request/command is handled, how a feature works end-to-end, how a subsystem is wired — not project structure or configuration listings.
-- Titles must be under 55 characters; descriptions under 120 characters.
+- Titles must be under 55 characters.
+- "description" is a rich 2-3 sentence explanation (roughly 180-300 characters): say what the flow does, which concrete files/symbols it touches, and why it is worth tracing. Be specific, not generic.
 - The "query" must instruct roots to trace a specific flow, naming the real files/symbols to start from.
 
 Difficulty for this batch (${intensity}):
@@ -444,21 +445,70 @@ function stripLineNumbers(content: string): string {
 
 export function parseSuggestions(content: string): CodemapSuggestion[] {
   const cleaned = extractJson(content);
+  let items: unknown[] = [];
   try {
     const parsed = JSON.parse(cleaned) as { suggestions?: unknown[] } | unknown[];
-    const items = Array.isArray(parsed) ? parsed : parsed.suggestions;
-    if (!Array.isArray(items)) return [];
-    return items
-      .filter(isSuggestion)
-      .slice(0, 3)
-      .map((item) => ({
-        title: item.title.trim().slice(0, 55),
-        description: item.description.trim().slice(0, 120),
-        query: item.query.trim().slice(0, 600),
-      }));
+    const list = Array.isArray(parsed) ? parsed : parsed.suggestions;
+    if (Array.isArray(list)) items = list;
   } catch {
-    return [];
+    // Strict parse failed — the model most likely truncated the JSON array
+    // mid-way (common on small models). Salvage every complete `{...}` object
+    // so we still surface the suggestions that did finish instead of falling
+    // back to the generic three.
+    items = salvageSuggestionObjects(content);
   }
+
+  return items
+    .filter(isSuggestion)
+    .slice(0, 3)
+    .map((item) => {
+      const query = item.query.trim().slice(0, 600);
+      // A detailed description is what makes the card useful. If the model
+      // omitted or truncated it, fall back to the query text so the card is
+      // never empty rather than dropping the whole suggestion.
+      const description = (item.description?.trim() || query).slice(0, 320);
+      return {
+        title: item.title.trim().slice(0, 55),
+        description,
+        query,
+      };
+    });
+}
+
+/**
+ * Recover individual suggestion objects from a truncated / malformed JSON
+ * response. Each `{...}` that balances is parsed and, if it looks like a
+ * suggestion (has a title + query), kept. This works even when the objects are
+ * nested inside a `{"suggestions":[ ... ]}` wrapper whose outer braces were
+ * never closed because the response was cut off. A trailing incomplete object
+ * is simply skipped.
+ */
+function salvageSuggestionObjects(content: string): unknown[] {
+  const objects: unknown[] = [];
+  const starts: number[] = [];
+  let quoted = false;
+  let escaped = false;
+  for (let index = 0; index < content.length; index++) {
+    const character = content[index];
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === '"') quoted = false;
+      continue;
+    }
+    if (character === '"') quoted = true;
+    else if (character === "{") starts.push(index);
+    else if (character === "}" && starts.length) {
+      const start = starts.pop()!;
+      try {
+        const candidate = JSON.parse(content.slice(start, index + 1));
+        if (isSuggestion(candidate)) objects.push(candidate);
+      } catch {
+        // Skip an object we still can't parse.
+      }
+    }
+  }
+  return objects;
 }
 
 function extractJson(content: string): string {
@@ -521,5 +571,8 @@ function fallbackSuggestions(
 function isSuggestion(value: unknown): value is CodemapSuggestion {
   if (!value || typeof value !== "object") return false;
   const item = value as Partial<CodemapSuggestion>;
-  return Boolean(item.title?.trim() && item.description?.trim() && item.query?.trim());
+  // Only title + query are required. The description is nice-to-have and is
+  // backfilled from the query when missing, so a suggestion with a valid title
+  // and query is never discarded just because the model dropped its description.
+  return Boolean(item.title?.trim() && item.query?.trim());
 }

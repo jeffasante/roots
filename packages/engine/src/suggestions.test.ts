@@ -64,6 +64,50 @@ test("returns nothing for output with no usable json", () => {
   assert.deepEqual(parseSuggestions("I could not analyze the repository."), []);
 });
 
+test("keeps a suggestion missing its description, backfilling from the query", () => {
+  const content = JSON.stringify({
+    suggestions: [{ title: "Startup flow", query: "Trace startup from main.rs into the runtime." }],
+  });
+
+  const result = parseSuggestions(content);
+
+  assert.equal(result.length, 1);
+  assert.equal(result[0].title, "Startup flow");
+  assert.equal(result[0].description, "Trace startup from main.rs into the runtime.");
+});
+
+test("salvages complete suggestions from a truncated json array", () => {
+  // Third object is cut off mid-string, so strict JSON.parse fails; the first
+  // two complete objects must still be recovered.
+  const truncated =
+    '{"suggestions":[' +
+    '{"title":"Auth flow","description":"Trace login through auth.ts.","query":"Trace the login flow from auth.ts."},' +
+    '{"title":"Routing","description":"Trace routes in router.ts.","query":"Trace routing from router.ts."},' +
+    '{"title":"Persistence","description":"Trace save';
+
+  const result = parseSuggestions(truncated);
+
+  assert.equal(result.length, 2);
+  assert.equal(result[0].title, "Auth flow");
+  assert.equal(result[1].title, "Routing");
+});
+
+test("keeps a detailed multi-sentence description up to the cap", () => {
+  const longDescription =
+    "Trace how the request handler in server.ts dispatches to the codemap agent. " +
+    "It starts at handleRequest, resolves the backend, then walks agent.run() which " +
+    "collects traces and synthesizes the final diagram. Worth tracing to understand the core loop.";
+  const content = JSON.stringify({
+    suggestions: [{ title: "Request handling", description: longDescription, query: "Trace request handling." }],
+  });
+
+  const result = parseSuggestions(content);
+
+  assert.equal(result.length, 1);
+  assert.ok(result[0].description.length > 120, "description keeps more than the old 120-char cap");
+  assert.ok(result[0].description.length <= 320, "description respects the 320-char cap");
+});
+
 test("isBarrelOrTypeOnly excludes re-export barrels and type-only modules", () => {
   assert.equal(isBarrelOrTypeOnly(`export * from "./a";\nexport { b } from "./b";`), true);
   assert.equal(isBarrelOrTypeOnly(`export interface Foo { id: string }\nexport type Bar = number;`), true);
