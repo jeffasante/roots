@@ -4,12 +4,38 @@ Generate AI-annotated, task-specific **codemaps** of your codebase: grouped, lin
 
 roots is read-only. It never edits your code — it explains it.
 
+![The roots panel — describe a flow, pick a model, and browse your saved codemaps](https://raw.githubusercontent.com/jeffasante/roots/main/packages/vscode/media/codemap-panel.png)
+
 ## Features
 
 - **Task-scoped codemaps** — Ask "how does auth work?" and get a grouped, cited walkthrough with jump-to-line locations instead of a wall of chat.
 - **Portable `.codemap` artifacts** — Codemaps are saved as files you can commit to git, diff, and revisit.
 - **Active recall quiz** — Turn any codemap into recall questions. Write your answer, hit **Submit**, and the model compares it to the verified trace and grades it (missed / partial / recalled) with one line of feedback.
 - **Pluggable model backends** — Swap between cloud and local providers from one picker: Anthropic, OpenAI, NVIDIA NIM, DeepSeek, Groq, Mistral, Together AI, OpenRouter, Ollama, cellm, or any OpenAI-compatible custom endpoint.
+
+### Grouped, line-linked overview
+
+Every codemap is a grouped walkthrough where each step links straight to the code.
+
+![Codemap overview with jump-to-code locations](https://raw.githubusercontent.com/jeffasante/roots/main/packages/vscode/media/codemap-overview.png)
+
+### Jump to the exact line
+
+Click any location to open the file at the referenced line.
+
+![Codemap overview beside the referenced source](https://raw.githubusercontent.com/jeffasante/roots/main/packages/vscode/media/jump-to-code.png)
+
+### See the flow as a diagram
+
+Switch to the diagram view to see how the steps connect, and click a node to open its code.
+
+![Codemap diagram view](https://raw.githubusercontent.com/jeffasante/roots/main/packages/vscode/media/codemap-diagram.png)
+
+### Lock it in with active recall
+
+Turn any codemap into a graded recall quiz. Write your answer, submit, and let the model grade it against the verified trace.
+
+![Active recall quiz graded against the verified trace](https://raw.githubusercontent.com/jeffasante/roots/main/packages/vscode/media/active-recall-quiz.png)
 
 ## Getting started
 

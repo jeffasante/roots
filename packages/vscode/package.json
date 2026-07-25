@@ -2,7 +2,7 @@
   "name": "roots-vscode",
   "displayName": "roots — Codemaps",
   "description": "Generate AI-annotated, task-specific codemaps of your codebase.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "jeffasante",
   "license": "MIT",
   "icon": "media/roots-icon.png",
