@@ -1,0 +1,135 @@
+{
+  "name": "roots-vscode",
+  "displayName": "roots — Codemaps",
+  "description": "Generate AI-annotated, task-specific codemaps of your codebase.",
+  "version": "0.1.0",
+  "publisher": "jeffasante",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other", "AI", "Visualization"],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "roots.generateCodemap",
+        "title": "roots: Generate Codemap",
+        "icon": "$(git-branch)"
+      },
+      {
+        "command": "roots.refreshCodemaps",
+        "title": "roots: Refresh Codemaps",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "roots.openCodemap",
+        "title": "roots: Open Codemap"
+      },
+      {
+        "command": "roots.startQuiz",
+        "title": "roots: Quiz Me (Active Recall)",
+        "icon": "$(mortar-board)"
+      },
+      {
+        "command": "roots.showBackends",
+        "title": "roots: Models",
+        "icon": "$(server)"
+      },
+      {
+        "command": "roots.selectModel",
+        "title": "roots: Select Model",
+        "icon": "$(chevron-down)"
+      },
+      {
+        "command": "roots.deleteCodemap",
+        "title": "roots: Delete Codemap",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "roots.openLocation",
+        "title": "roots: Open Location"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "roots",
+          "title": "roots",
+          "icon": "media/roots-icon.png"
+        }
+      ]
+    },
+    "views": {
+      "roots": [
+        {
+          "id": "roots.codemaps",
+          "name": "roots",
+          "type": "webview"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "roots.generateCodemap",
+          "when": "view == roots.codemaps",
+          "group": "navigation@1"
+        },
+        {
+          "command": "roots.showBackends",
+          "when": "view == roots.codemaps",
+          "group": "navigation@2"
+        },
+        {
+          "command": "roots.refreshCodemaps",
+          "when": "view == roots.codemaps",
+          "group": "navigation@3"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "roots",
+      "properties": {
+        "roots.backend.kind": {
+          "type": "string",
+          "enum": ["anthropic", "openai", "ollama", "cellm"],
+          "default": "anthropic",
+          "description": "Default inference backend kind."
+        },
+        "roots.backend.model": {
+          "type": "string",
+          "default": "",
+          "description": "Model name for the selected backend. Leave blank to use the option's default."
+        },
+        "roots.backend.baseUrl": {
+          "type": "string",
+          "default": "",
+          "description": "Base URL override (for OpenAI-compatible providers such as NVIDIA, Groq, or a self-hosted gateway)."
+        },
+        "roots.enginePath": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to the roots-engine entry (dist/server.js). Leave blank to use the bundled engine."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "watch": "tsc -p tsconfig.json --watch",
+    "package:prepare": "npm run build --workspace @roots/engine && npm run build && rm -rf engine schema && mkdir -p engine/dist && esbuild ../engine/dist/server.js --bundle --platform=node --format=cjs --outfile=engine/dist/server.js && cp -R ../../schema schema",
+    "package": "npm run package:prepare && vsce package --no-dependencies"
+  },
+  "dependencies": {
+    "@roots/engine": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/vscode": "^1.85.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.4.5"
+  }
+}

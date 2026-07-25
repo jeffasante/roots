@@ -1,0 +1,5 @@
+{
+    "roots.backend.kind": "openai",
+    "roots.backend.model": "nvidia/llama-3.3-nemotron-super-49b-v1.5",
+    "roots.backend.baseUrl": "https://integrate.api.nvidia.com/v1"
+}

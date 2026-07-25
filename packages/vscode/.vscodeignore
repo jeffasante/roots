@@ -1,0 +1,9 @@
+**/.git/**
+**/.DS_Store
+src/**
+tsconfig.json
+engine/dist/**/*.test.*
+engine/dist/**/*.map
+engine/dist/**/*.d.ts
+node_modules/@roots/**
+node_modules/**

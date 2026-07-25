@@ -1,0 +1,205 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/jeffasante/roots/schema/codemap.schema.json",
+  "title": "Codemap",
+  "description": "A portable, git-trackable artifact describing an AI-generated, task-specific trace of how a feature/flow works in a codebase.",
+  "type": "object",
+  "required": ["version", "id", "query", "created_at", "model", "repo", "traces"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "type": "string",
+      "description": "Schema version of this codemap artifact.",
+      "pattern": "^\\d+\\.\\d+$"
+    },
+    "id": {
+      "type": "string",
+      "description": "Stable, human-readable identifier for the codemap (e.g. 'auth-flow-2026-07-25').",
+      "minLength": 1
+    },
+    "query": {
+      "type": "string",
+      "description": "The natural-language task the codemap answers.",
+      "minLength": 1
+    },
+    "overview": {
+      "type": "string",
+      "description": "A short narrative summary of the whole flow, referencing traces by id in square brackets (e.g. '...router init [1a]...')."
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO-8601 timestamp of when the codemap was generated."
+    },
+    "model": {
+      "$ref": "#/definitions/ModelMeta"
+    },
+    "repo": {
+      "$ref": "#/definitions/RepoMeta"
+    },
+    "traces": {
+      "type": "array",
+      "description": "Tree of trace nodes. Root-level entries are the top of the tree; nesting is expressed via child ids.",
+      "items": { "$ref": "#/definitions/Trace" }
+    },
+    "diagram": {
+      "$ref": "#/definitions/Diagram"
+    },
+    "log": {
+      "type": "array",
+      "description": "Optional structured record of every tool call the agent made while producing this codemap. Used for eval/debugging.",
+      "items": { "$ref": "#/definitions/LogEntry" }
+    }
+  },
+  "definitions": {
+    "ModelMeta": {
+      "type": "object",
+      "required": ["backend", "model_name", "mode"],
+      "additionalProperties": false,
+      "properties": {
+        "backend": {
+          "type": "string",
+          "description": "Backend identifier (e.g. 'anthropic', 'openai', 'ollama', 'cellm')."
+        },
+        "model_name": {
+          "type": "string",
+          "description": "Concrete model name (e.g. 'claude-sonnet-4', 'qwen2.5-0.5b')."
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["cloud", "local"],
+          "description": "Whether inference ran against a cloud API or a local runtime."
+        }
+      }
+    },
+    "RepoMeta": {
+      "type": "object",
+      "required": ["root"],
+      "additionalProperties": false,
+      "properties": {
+        "root": {
+          "type": "string",
+          "description": "Absolute path to the repository root at generation time."
+        },
+        "commit": {
+          "type": "string",
+          "description": "Git commit hash the codemap was generated against, if available."
+        }
+      }
+    },
+    "Location": {
+      "type": "object",
+      "required": ["file", "start_line", "end_line"],
+      "additionalProperties": false,
+      "properties": {
+        "file": {
+          "type": "string",
+          "description": "Repo-relative path to the source file."
+        },
+        "start_line": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "1-based inclusive start line."
+        },
+        "end_line": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "1-based inclusive end line."
+        }
+      }
+    },
+    "Trace": {
+      "type": "object",
+      "required": ["id", "title", "summary", "locations"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique id of the trace node within this codemap.",
+          "minLength": 1
+        },
+        "title": {
+          "type": "string",
+          "description": "Short label for the step.",
+          "minLength": 1
+        },
+        "summary": {
+          "type": "string",
+          "description": "One- to three-sentence explanation of what happens here."
+        },
+        "motivation": {
+          "type": "string",
+          "description": "Optional explanation of why this section exists in the architecture."
+        },
+        "details": {
+          "type": "string",
+          "description": "Optional expanded implementation guide for this section."
+        },
+        "locations": {
+          "type": "array",
+          "description": "Exact file + line ranges that ground this step.",
+          "items": { "$ref": "#/definitions/Location" }
+        },
+        "children": {
+          "type": "array",
+          "description": "Ids of child trace nodes (tree structure).",
+          "items": { "type": "string" }
+        },
+        "confidence": {
+          "$ref": "#/definitions/Confidence"
+        }
+      }
+    },
+    "Confidence": {
+      "type": "object",
+      "required": ["location_verified", "location_evidence"],
+      "additionalProperties": false,
+      "description": "Per-trace honesty signal separating deterministic location verification from probabilistic summary grounding.",
+      "properties": {
+        "location_verified": {
+          "type": "boolean",
+          "description": "Deterministic: do this trace's locations resolve in the repo? No model call."
+        },
+        "location_evidence": {
+          "type": "string",
+          "enum": ["symbol", "file_line", "none"],
+          "description": "How the location was confirmed: matched symbol (strongest), file+line only, or nothing."
+        },
+        "summary_grounded": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Optional probabilistic score (0..1) that a second-pass read of the code supports the summary."
+        }
+      }
+    },
+    "Diagram": {
+      "type": "object",
+      "required": ["format", "content"],
+      "additionalProperties": false,
+      "properties": {
+        "format": {
+          "type": "string",
+          "enum": ["mermaid"],
+          "description": "Diagram source format. Only mermaid is supported in v1."
+        },
+        "content": {
+          "type": "string",
+          "description": "Raw diagram source."
+        }
+      }
+    },
+    "LogEntry": {
+      "type": "object",
+      "required": ["tool", "input"],
+      "additionalProperties": true,
+      "properties": {
+        "tool": { "type": "string" },
+        "input": {},
+        "output": {},
+        "error": { "type": "string" },
+        "ts": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}

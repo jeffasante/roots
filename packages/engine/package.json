@@ -1,0 +1,27 @@
+{
+  "name": "@roots/engine",
+  "version": "0.1.0",
+  "description": "roots engine — analysis tools, agent orchestrator, pluggable model backends, and the codemap store.",
+  "license": "MIT",
+  "type": "commonjs",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "roots-engine": "dist/server.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/server.js",
+    "dev": "tsc -p tsconfig.json --watch",
+    "test": "tsc -p tsconfig.json && node --test \"dist/**/*.test.js\""
+  },
+  "dependencies": {
+    "ajv": "^8.12.0",
+    "ajv-formats": "^3.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.4.5"
+  }
+}

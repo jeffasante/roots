@@ -1,0 +1,17 @@
+node_modules/
+packages/*/dist/
+packages/*/out/
+packages/vscode/engine/
+packages/vscode/schema/
+*.vsix
+.DS_Store
+
+# Generated codemaps (contain local absolute paths)
+.roots/
+
+# Local model/API keys and env
+.env
+.env.*
+
+# Design blueprint (internal)
+roots-blueprint-v1.md

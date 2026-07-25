@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>roots — Codemap</title>
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" />
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #1f2328;
+    --muted: #6a7178;
+    --faint: #8c959f;
+    --accent: #3b5bdb;
+    --panel: #f6f7f9;
+    --panel-2: #eef0f3;
+    --border: #e4e7ec;
+    --code-bg: #f6f7f9;
+    --tree-line: #d7dbe0;
+    --kw: #cf222e;
+    --fn: #6639ba;
+    --str: #0a7d3e;
+    --num: #0550ae;
+    --com: #8c959f;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    font-size: 13px;
+    line-height: 1.55;
+  }
+
+  /* ---- Header ---- */
+  .topbar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 12px;
+    position: sticky; top: 0; background: var(--bg); z-index: 10;
+  }
+  .topbar .spacer { flex: 1; }
+  .icon-btn {
+    width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center;
+    border: none; background: transparent; color: var(--muted); border-radius: 6px; cursor: pointer;
+  }
+  .icon-btn:hover { background: var(--panel-2); color: var(--fg); }
+  .icon-btn svg { width: 15px; height: 15px; }
+
+  .head { padding: 14px 18px 4px; }
+  .head h1 { font-size: 15px; font-weight: 600; margin: 0 0 6px; letter-spacing: -0.01em; }
+  .head .lead { color: var(--muted); font-size: 12.5px; margin: 0; max-width: 70ch; }
+  .chip {
+    display: inline-block; font-weight: 600; color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+    border-radius: 4px; padding: 0 4px; font-size: 11px; line-height: 1.5;
+  }
+
+  .content { padding: 8px 0 60px; }
+
+  /* ---- Section (collapsible group) ---- */
+  .section { border-top: 1px solid var(--border); }
+  .section-head {
+    display: flex; align-items: flex-start; gap: 10px;
+    padding: 12px 18px;
+    background: var(--panel);
+    cursor: pointer;
+  }
+  .section-head:hover { background: var(--panel-2); }
+  .section-num {
+    flex-shrink: 0; font-weight: 600; font-size: 12px; color: var(--fg);
+    min-width: 14px; text-align: center; margin-top: 1px;
+  }
+  .section-body-head { flex: 1; min-width: 0; }
+  .section-title { font-weight: 600; font-size: 13px; }
+  .section-desc { color: var(--muted); font-size: 12px; margin-top: 1px; }
+  .see { color: var(--accent); cursor: pointer; }
+  .see:hover { text-decoration: underline; }
+  .chevron { flex-shrink: 0; color: var(--faint); margin-top: 2px; transition: transform .15s; }
+  .section.collapsed .chevron { transform: rotate(-90deg); }
+  .section.collapsed .section-detail { display: none; }
+
+  .section-detail { padding: 6px 18px 16px; }
+  .group-label { font-weight: 600; font-size: 12px; margin: 10px 0 4px; }
+
+  /* ---- Tree ---- */
+  .tree { padding-left: 2px; }
+  .tnode { position: relative; padding-left: 18px; }
+  .tnode::before {
+    content: ""; position: absolute; left: 6px; top: 0; bottom: 0;
+    border-left: 1px solid var(--tree-line);
+  }
+  .tnode:last-child::before { bottom: auto; height: 11px; }
+  .trow { position: relative; padding: 3px 0; }
+  .trow::before {
+    content: ""; position: absolute; left: -12px; top: 11px; width: 10px;
+    border-top: 1px solid var(--tree-line);
+  }
+  /* leaf with code + number badge */
+  .step { display: flex; align-items: baseline; gap: 8px; }
+  .step-num { flex-shrink: 0; font-weight: 600; font-size: 11.5px; color: var(--fg); }
+  .step-main { flex: 1; min-width: 0; }
+  .step-title { font-size: 12.5px; }
+  .filemark { float: right; color: var(--faint); font-size: 11px; font-family: ui-monospace, SFMono-Regular, monospace; cursor: pointer; }
+  .filemark:hover { color: var(--accent); text-decoration: underline; }
+  pre.code {
+    margin: 3px 0 0; padding: 6px 9px;
+    background: var(--code-bg); border: 1px solid var(--border);
+    border-radius: 6px; overflow-x: auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; line-height: 1.5;
+  }
+  /* plain bullet nodes (no code) */
+  .bullet { font-size: 12.5px; color: var(--fg); }
+  .bullet.muted { color: var(--muted); }
+
+  .kw { color: var(--kw); } .fn { color: var(--fn); } .str { color: var(--str); }
+  .num { color: var(--num); } .com { color: var(--com); }
+
+  .katex { font-size: 1em; }
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <button class="icon-btn" title="Back">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+    </button>
+    <span>roots</span>
+    <span class="spacer"></span>
+    <button class="icon-btn" title="Map view">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21"/><line x1="9" y1="3" x2="9" y2="18"/><line x1="15" y1="6" x2="15" y2="21"/></svg>
+    </button>
+    <button class="icon-btn" title="Send to chat">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+    </button>
+    <button class="icon-btn" title="Share">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>
+    </button>
+  </div>
+
+  <div class="head">
+    <h1>trace the auth + rate-limit pipeline</h1>
+    <p class="lead">
+      A login request is validated, throttled, and turned into a session. The route
+      handler parses the payload <span class="chip">1a</span>, applies a token-bucket rate limit
+      <span class="chip">1b</span>, hashes the password with a tuned bcrypt cost <span class="chip">1c</span>, and
+      issues short-lived access and refresh tokens <span class="chip">1d</span>.
+    </p>
+  </div>
+
+  <div class="content" id="content"></div>
+
+  <script type="module">
+    import renderMathInElement from "https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.mjs";
+
+    // Minimal token highlighter. Single-pass tokenizer so replacements never
+    // collide with markup already inserted (which caused broken spans before).
+    function hl(code) {
+      const esc = (s) => s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+      const KW = new Set(["def","class","return","import","from","for","in","if","else","self","True","False","None","await","async","const","let","var","function","new"]);
+      // Order matters: comments, strings, numbers, identifiers, everything else.
+      const re = /(#.*$|\/\/.*$)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)|(\b\d+(?:\.\d+)?\b)|([A-Za-z_]\w*)|(\s+)|([^\sA-Za-z0-9_]+)/gm;
+      let out = "";
+      let m;
+      while ((m = re.exec(code)) !== null) {
+        if (m[1]) out += `<span class="com">${esc(m[1])}</span>`;
+        else if (m[2]) out += `<span class="str">${esc(m[2])}</span>`;
+        else if (m[3]) out += `<span class="num">${esc(m[3])}</span>`;
+        else if (m[4]) {
+          const isFn = code[re.lastIndex] === "(";
+          const cls = KW.has(m[4]) ? "kw" : isFn ? "fn" : "";
+          out += cls ? `<span class="${cls}">${esc(m[4])}</span>` : esc(m[4]);
+        } else if (m[5]) out += m[5];
+        else out += esc(m[6]);
+      }
+      return out;
+    }
+
+    // --- Sample codemap data (generic auth flow demo) ---
+    const sections = [
+      {
+        num: "1",
+        title: "Handle the login request",
+        desc: "The route parses credentials, throttles the caller, verifies the password, and mints a session.",
+        groups: [
+          {
+            label: "Request Pipeline",
+            nodes: [
+              { step: "1a", title: "Parse and validate payload", code: "const { email, password } = loginSchema.parse(req.body)", file: "routes/auth.ts:12" },
+              { children: [
+                { text: "Reject malformed input with 400", muted: true },
+                { text: "Normalize email casing", muted: true },
+              ]},
+              { text: "Apply rate limiting", muted: true, children: [
+                { step: "1b", title: "Token-bucket check", code: "if (!bucket.take(1)) return res.status(429)", file: "lib/ratelimit.ts:10" },
+                { children: [
+                  { text: "Refill rate r = 5 tokens/sec", muted: true },
+                  { text: "Burst capacity b = 20", muted: true },
+                ]},
+              ]},
+              { step: "1c", title: "Verify password", code: "const ok = await bcrypt.compare(password, user.hash)", file: "lib/hash.ts:5" },
+              { text: "Issue session tokens", muted: true, children: [
+                { step: "1d", title: "Sign access + refresh JWTs", code: "const access = jwt.sign(claims, secret, { expiresIn: '15m' })", file: "lib/session.ts:40" },
+                { children: [
+                  { text: "Access token TTL 15 min", muted: true },
+                  { text: "Refresh token TTL 7 days", muted: true },
+                  { text: "Set HttpOnly cookie", muted: true },
+                ]},
+              ]},
+            ],
+          },
+        ],
+      },
+      {
+        num: "2",
+        title: "Refresh an expired session",
+        desc: "How a client exchanges a valid refresh token for a new access token.",
+        collapsed: true,
+        groups: [],
+      },
+      {
+        num: "3",
+        title: "Revoke and log out",
+        desc: "How sessions are invalidated on logout and token reuse detection.",
+        groups: [
+          {
+            label: "Revocation Path",
+            nodes: [
+              { text: "logout() clears the session store", muted: true },
+            ],
+          },
+        ],
+      },
+    ];
+
+    // --- Render ---
+    function renderNodes(nodes) {
+      return `<div class="tree">` + nodes.map((n) => {
+        const inner = renderNode(n);
+        const row = inner ? `<div class="trow">${inner}</div>` : "";
+        return `<div class="tnode">${row}${
+          n.children ? renderNodes(n.children) : ""
+        }</div>`;
+      }).join("") + `</div>`;
+    }
+    function renderNode(n) {
+      if (!n.step && n.text == null) return ""; // pure container node
+      if (n.step) {
+        return `<div class="step">
+          <span class="step-num">${n.step}</span>
+          <div class="step-main">
+            <div class="step-title">${n.file ? `<span class="filemark" data-file="${n.file}">${n.file}</span>` : ""}${n.title}</div>
+            ${n.code ? `<pre class="code">${hl(n.code)}</pre>` : ""}
+          </div>
+        </div>`;
+      }
+      return `<span class="bullet ${n.muted ? "muted" : ""}">${n.text}</span>`;
+    }
+
+    function renderSection(s) {
+      const body = s.groups.map((g) =>
+        `${g.label ? `<div class="group-label">${g.label}</div>` : ""}${renderNodes(g.nodes)}`
+      ).join("");
+      return `<div class="section ${s.collapsed ? "collapsed" : ""}">
+        <div class="section-head">
+          <span class="section-num">${s.num}</span>
+          <div class="section-body-head">
+            <div class="section-title">${s.title}</div>
+            <div class="section-desc">${s.desc} <span class="see">See more</span></div>
+          </div>
+          <span class="chevron">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+          </span>
+        </div>
+        <div class="section-detail">${body}</div>
+      </div>`;
+    }
+
+    document.getElementById("content").innerHTML = sections.map(renderSection).join("");
+
+    // collapse toggle
+    for (const head of document.querySelectorAll(".section-head")) {
+      head.addEventListener("click", (e) => {
+        if (e.target.classList.contains("see")) return;
+        head.closest(".section").classList.toggle("collapsed");
+      });
+    }
+    for (const see of document.querySelectorAll(".see")) {
+      see.addEventListener("click", (e) => {
+        e.stopPropagation();
+        see.textContent = see.textContent === "See more" ? "See less" : "See more";
+      });
+    }
+    for (const fm of document.querySelectorAll(".filemark")) {
+      fm.addEventListener("click", (e) => { e.stopPropagation(); console.log("open", fm.dataset.file); });
+    }
+
+    renderMathInElement(document.body, {
+      delimiters: [
+        { left: "$$", right: "$$", display: true },
+        { left: "$", right: "$", display: false },
+      ],
+      throwOnError: false,
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+{
+  "name": "roots-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "roots — AI-annotated, task-specific codemaps for your codebase.",
+  "author": "Jeff Asante",
+  "license": "MIT",
+  "workspaces": [
+    "packages/engine",
+    "packages/vscode"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "engine": "npm run start --workspace @roots/engine",
+    "clean": "rimraf packages/*/dist packages/*/out"
+  },
+  "devDependencies": {
+    "rimraf": "^6.0.1",
+    "typescript": "^5.4.5"
+  }
+}
