@@ -67,6 +67,9 @@ export interface CodemapSuggestion {
   query: string;
 }
 
+/** Difficulty tier for repository suggestions. */
+export type SuggestionIntensity = "foundational" | "intermediate" | "advanced";
+
 export interface AskResult {
   answer: string;
   citations: Location[];
@@ -162,7 +165,11 @@ export class EngineClient {
     return this.call("listBackends", {});
   }
 
-  suggestCodemaps(args: { repoRoot: string; backend: BackendConfig }): Promise<CodemapSuggestion[]> {
+  suggestCodemaps(args: {
+    repoRoot: string;
+    backend: BackendConfig;
+    intensity?: SuggestionIntensity;
+  }): Promise<CodemapSuggestion[]> {
     return this.call("suggestCodemaps", args);
   }
 

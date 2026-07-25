@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { assessCodemapQuality } from "./agent.js";
+import { assessCodemapQuality, normalizeDiagram } from "./agent.js";
 import type { Trace } from "./types.js";
 
 const location = { file: "src/server.ts", start_line: 1, end_line: 4 };
@@ -53,4 +53,27 @@ test("quality gate accepts a grouped grounded codemap", () => {
     "The request enters through server registration [t1a], moves through backend construction [t2a], and finishes in verified persistence [t3b]. Each phase follows the concrete runtime path.";
 
   assert.deepEqual(assessCodemapQuality(overview, traces), { ok: true, issues: [] });
+});
+
+test("diagram fallback groups sections and connects trace ids", () => {
+  const traces: Trace[] = [
+    { id: "t1", title: "RPC Server", summary: "", locations: [location], children: ["t1a", "t1b"] },
+    { id: "t1a", title: "Create server", summary: "", locations: [location] },
+    { id: "t1b", title: "Register handlers", summary: "", locations: [location] },
+    { id: "t2", title: "Backend Factory", summary: "", locations: [location], children: ["t2a"] },
+    { id: "t2a", title: "Initialize factory", summary: "", locations: [location] },
+  ];
+
+  const diagram = normalizeDiagram(undefined, traces);
+
+  assert.match(diagram.content, /^flowchart TD/);
+  assert.match(diagram.content, /subgraph Section1\["1\. RPC Server"\]/);
+  assert.match(diagram.content, /t1a\["1a\. Create server"\]/);
+  assert.match(diagram.content, /t1a --> t1b/);
+  assert.match(diagram.content, /t1b --> t2a/);
+});
+
+test("valid model Mermaid is preserved", () => {
+  const content = "flowchart LR\n  t1a --> t1b";
+  assert.deepEqual(normalizeDiagram({ format: "mermaid", content }, []), { format: "mermaid", content });
 });

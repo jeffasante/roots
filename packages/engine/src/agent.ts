@@ -1,6 +1,6 @@
 import type { InferenceBackend } from "./backends/types.js";
 import { Tools } from "./tools.js";
-import type { Codemap, LogEntry, Trace } from "./types.js";
+import type { Codemap, Diagram, LogEntry, Trace } from "./types.js";
 import { CODEMAP_VERSION } from "./types.js";
 import { verifyTrace } from "./verify.js";
 
@@ -80,7 +80,7 @@ Shape:
       "locations": [ { "file": "repo/relative/path", "start_line": 15, "end_line": 18 } ]
     }
   ],
-  "diagram": { "format": "mermaid", "content": "flowchart TD\\n  A[..] --> B[..]" }
+  "diagram": { "format": "mermaid", "content": "flowchart TD\\n  subgraph Section1[\"1. Section title\"]\\n    t1a[\"1a. Concrete sub-step\"] --> t1b[\"1b. Next sub-step\"]\\n  end" }
 }
 
 Rules:
@@ -89,7 +89,9 @@ Rules:
 - Titles: sections name a concept ("Admin Authentication Middleware"); children name a concrete action ("API key extraction from headers").
 - Top-level sections should include "motivation" and "details" when the research supports them. Do not add these fields to simple child actions.
 - summaries are concrete and specific to the cited code — not generic. Order sections in execution/flow order; order children in the order they run.
-- overview is required and must reference several trace ids in [brackets]. The diagram is optional but preferred.`;
+- Prose fields may use concise Markdown for emphasis, inline code, lists, and fenced code blocks. Do not emit raw HTML or Markdown headings.
+- overview is required and must reference several trace ids in [brackets].
+- diagram is required. Emit valid Mermaid flowchart TD syntax. Use one subgraph per top-level section, one node per child step, actual trace ids as node ids (for example t1a), displayed labels like "1a. Register handlers", arrows between sequential child nodes, and arrows connecting the last child of one section to the first child of the next. Do not use Mermaid click directives or HTML labels.`;
 
 const REPAIR_SYSTEM = `${SYNTHESIS_SYSTEM}
 
@@ -189,7 +191,7 @@ export class Agent {
       model: this.backend.meta,
       repo: { root: opts.repoRoot },
       traces,
-      diagram: parsed.diagram,
+      diagram: normalizeDiagram(parsed.diagram, traces),
       log,
     };
   }
@@ -240,6 +242,48 @@ function parseSynthesis(
   const overview =
     typeof obj?.overview === "string" && obj.overview.trim() ? obj.overview.trim() : undefined;
   return { traces, diagram, overview };
+}
+
+export function normalizeDiagram(diagram: Codemap["diagram"] | undefined, traces: Trace[]): Diagram {
+  const content = diagram?.format === "mermaid" ? diagram.content?.trim() : "";
+  if (content && /^flowchart\s+(?:TD|TB|LR|RL|BT)\b/m.test(content)) {
+    return { format: "mermaid", content };
+  }
+  return { format: "mermaid", content: buildMermaidDiagram(traces) };
+}
+
+function buildMermaidDiagram(traces: Trace[]): string {
+  const byId = new Map(traces.map((trace) => [trace.id, trace]));
+  const childIds = new Set(traces.flatMap((trace) => trace.children ?? []));
+  const roots = traces.filter((trace) => !childIds.has(trace.id));
+  const lines = ["flowchart TD"];
+  let previousLast: string | undefined;
+
+  roots.forEach((root, sectionIndex) => {
+    const sectionLabel = sectionIndex + 1;
+    const children = (root.children ?? []).map((id) => byId.get(id)).filter((trace): trace is Trace => Boolean(trace));
+    const nodes = children.length > 0 ? children : [root];
+    lines.push(`  subgraph Section${sectionLabel}["${sectionLabel}. ${mermaidLabel(root.title)}"]`);
+    nodes.forEach((trace, stepIndex) => {
+      const label = children.length > 0 ? `${sectionLabel}${String.fromCharCode(97 + stepIndex)}` : String(sectionLabel);
+      lines.push(`    ${mermaidId(trace.id)}["${label}. ${mermaidLabel(trace.title)}"]`);
+      if (stepIndex > 0) lines.push(`    ${mermaidId(nodes[stepIndex - 1].id)} --> ${mermaidId(trace.id)}`);
+    });
+    lines.push("  end");
+    if (previousLast) lines.push(`  ${previousLast} --> ${mermaidId(nodes[0].id)}`);
+    previousLast = mermaidId(nodes[nodes.length - 1].id);
+  });
+
+  return lines.join("\n");
+}
+
+function mermaidId(value: string): string {
+  const safe = value.replace(/[^A-Za-z0-9_]/g, "_");
+  return /^[A-Za-z_]/.test(safe) ? safe : `trace_${safe}`;
+}
+
+function mermaidLabel(value: string): string {
+  return value.replace(/["\n\r]/g, " ").replace(/\s+/g, " ").trim();
 }
 
 /** Drop hallucinated locations so the artifact stays grounded and schema-valid. */

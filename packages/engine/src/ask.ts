@@ -31,6 +31,7 @@ Rules:
 - Prefer the codemap context first; only read files when you need specifics not in the map.
 - Keep it to at most 3 reads, then answer.
 - Be concrete and concise. Reference real symbols and files. If the answer isn't in this codebase, say so plainly.
+- Format the answer with concise Markdown when useful: paragraphs, lists, bold emphasis, inline code, or fenced code blocks. Do not emit raw HTML or Markdown headings.
 - Every citation MUST be a file:line range you actually saw (in the codemap or a read). Never invent paths or lines.`;
 
 interface AskCall {

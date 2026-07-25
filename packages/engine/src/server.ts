@@ -22,7 +22,7 @@ import { askCodemap } from "./ask.js";
 import { BACKEND_OPTIONS, createBackend, type BackendConfig } from "./backends/index.js";
 import { RpcServer } from "./rpc.js";
 import { CodemapStore } from "./store.js";
-import { suggestCodemaps } from "./suggestions.js";
+import { suggestCodemaps, type SuggestionIntensity } from "./suggestions.js";
 import { validateCodemap } from "./validate.js";
 import type { Codemap } from "./types.js";
 
@@ -31,11 +31,11 @@ const server = new RpcServer(process.stdin, process.stdout);
 server.on("listBackends", async () => BACKEND_OPTIONS);
 
 server.on("suggestCodemaps", async (params) => {
-  const p = params as { repoRoot: string; backend: BackendConfig };
+  const p = params as { repoRoot: string; backend: BackendConfig; intensity?: SuggestionIntensity };
   if (!p?.repoRoot || !p?.backend) {
     throw new Error("suggestCodemaps requires { repoRoot, backend }");
   }
-  return suggestCodemaps(createBackend(p.backend), p.repoRoot);
+  return suggestCodemaps(createBackend(p.backend), p.repoRoot, p.intensity);
 });
 
 server.on("generateCodemap", async (params, notify) => {

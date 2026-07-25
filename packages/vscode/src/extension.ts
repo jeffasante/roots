@@ -8,6 +8,7 @@ import {
   type BackendOption,
   type Codemap,
   type Location,
+  type SuggestionIntensity,
 } from "./engineClient.js";
 import { BackendsPanel } from "./webview/backendsPanel.js";
 import { CodemapsViewProvider } from "./webview/codemapsView.js";
@@ -24,6 +25,8 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   engine = new EngineClient(enginePath);
   CodemapPanel.configure((codemap, question) => askCodemap(context, codemap, question));
+  const FAVORITES_KEY = "roots.favorites";
+  const readFavorites = () => context.globalState.get<string[]>(FAVORITES_KEY, []);
   codemapsView = new CodemapsViewProvider({
     generate: (query) => generateCodemap(context, query),
     open: (codemap) => CodemapPanel.show(codemap),
@@ -31,9 +34,16 @@ export function activate(context: vscode.ExtensionContext): void {
     delete: (codemap) => deleteCodemap({ kind: "codemap", codemap }),
     selectModel: () => selectModel(context),
     refresh: () => refreshCodemaps(),
-    suggest: () => refreshSuggestions(context),
+    suggest: (intensity) => refreshSuggestions(context, intensity),
     reveal: (repoRoot, loc) => openLocation(repoRoot, loc),
     ask: (codemap, question) => askCodemap(context, codemap, question),
+    favorites: () => readFavorites(),
+    toggleFavorite: async (id) => {
+      const current = new Set(readFavorites());
+      if (current.has(id)) current.delete(id);
+      else current.add(id);
+      await context.globalState.update(FAVORITES_KEY, [...current]);
+    },
   });
 
   context.subscriptions.push(
@@ -75,7 +85,10 @@ async function refreshCodemaps(): Promise<void> {
   }
 }
 
-async function refreshSuggestions(context: vscode.ExtensionContext): Promise<void> {
+async function refreshSuggestions(
+  context: vscode.ExtensionContext,
+  intensity: SuggestionIntensity = "intermediate",
+): Promise<void> {
   const root = workspaceRoot();
   if (!root || !engine || !codemapsView) return;
   codemapsView.setSuggestionsLoading();
@@ -85,7 +98,7 @@ async function refreshSuggestions(context: vscode.ExtensionContext): Promise<voi
       codemapsView.setSuggestionsError("Select a configured model to generate suggestions.");
       return;
     }
-    const suggestions = await engine.suggestCodemaps({ repoRoot: root, backend });
+    const suggestions = await engine.suggestCodemaps({ repoRoot: root, backend, intensity });
     codemapsView.setSuggestions(suggestions);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

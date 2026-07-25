@@ -71,41 +71,39 @@ export class BackendsPanel {
     margin: 0; padding: 0; line-height: 1.5;
   }
   .header {
-    padding: 14px 18px; border-bottom: 1px solid var(--border);
+    padding: 10px 16px; border-bottom: 1px solid var(--border);
     background: var(--vscode-editor-background);
     display: flex; align-items: center; justify-content: space-between; gap: 12px;
   }
-  h1 { font-size: 0.98rem; font-weight: 600; margin: 0; }
-  .meta { color: var(--muted); font-size: 0.78rem; margin-top: 3px; }
-  .content { max-width: 720px; margin: 0 auto; padding: 20px 18px 48px; display: flex; flex-direction: column; gap: 10px; }
-  .card { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  h1 { font-size: 0.9rem; font-weight: 600; margin: 0; }
+  .meta { color: var(--muted); font-size: 0.75rem; margin-top: 2px; }
+  .content { max-width: 640px; margin: 0 auto; padding: 12px 16px 32px; display: flex; flex-direction: column; gap: 4px; }
+  .card { border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
+  .card + .card { margin-top: 0; }
   .card-head {
-    display: flex; align-items: center; gap: 10px;
-    padding: 12px 14px; cursor: pointer; user-select: none;
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 12px; cursor: pointer; user-select: none;
   }
-  .card-head:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.06)); }
-  .chev { color: var(--muted); font-size: 0.8rem; transition: transform 0.15s; width: 12px; text-align: center; }
+  .card-head:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.05)); }
+  .chev { color: var(--muted); font-size: 0.7rem; transition: transform 0.15s; width: 10px; text-align: center; }
   .card.open .chev { transform: rotate(90deg); }
-  .name { font-weight: 600; font-size: 0.92rem; flex: 1; min-width: 0; }
-  .pill {
-    font-size: 0.66rem; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase;
-    padding: 1px 8px; border-radius: 999px; border: 1px solid transparent;
+  .name { font-weight: 600; font-size: 0.85rem; flex: 1; min-width: 0; }
+  .tag {
+    font-size: 0.62rem; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase;
+    color: var(--muted);
   }
-  .pill-cloud { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
-  .pill-local { color: var(--vscode-charts-green, #3fb950); border-color: color-mix(in srgb, var(--vscode-charts-green, #3fb950) 40%, transparent); background: color-mix(in srgb, var(--vscode-charts-green, #3fb950) 8%, transparent); }
-  .desc { color: var(--muted); font-size: 0.8rem; }
-  .card-body { display: none; padding: 0 14px 14px 36px; }
+  .desc { color: var(--muted); font-size: 0.77rem; }
+  .card-body { display: none; padding: 0 12px 10px 30px; }
   .card.open .card-body { display: block; }
-  .row { display: flex; gap: 8px; font-size: 0.82rem; padding: 3px 0; }
-  .row .k { color: var(--muted); min-width: 96px; }
+  .row { display: flex; gap: 8px; font-size: 0.78rem; padding: 2px 0; }
+  .row .k { color: var(--muted); min-width: 92px; }
   .row .v { font-family: var(--vscode-editor-font-family, monospace); }
-  .cta { padding: 16px 18px 0; }
   .btn {
-    display: inline-flex; align-items: center; gap: 6px; font-size: 0.82rem;
-    padding: 6px 14px; border: 1px solid var(--accent); border-radius: 7px;
-    background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent); cursor: pointer;
+    display: inline-flex; align-items: center; gap: 6px; font-size: 0.78rem;
+    padding: 4px 11px; border: 1px solid var(--border); border-radius: 6px;
+    background: transparent; color: var(--vscode-foreground); cursor: pointer;
   }
-  .btn:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+  .btn:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.08)); border-color: color-mix(in srgb, var(--vscode-foreground) 30%, transparent); }
 </style>
 </head>
 <body>
@@ -145,7 +143,6 @@ export class BackendsPanel {
 }
 
 function backendCard(b: BackendOption, i: number): string {
-  const pillClass = b.mode === "local" ? "pill pill-local" : "pill pill-cloud";
   const open = i === 0 ? " open" : "";
   const rows = [
     ["Default model", b.defaultModel],
@@ -161,12 +158,12 @@ function backendCard(b: BackendOption, i: number): string {
     <div class="card-head">
       <span class="chev">▸</span>
       <span class="name">${escapeHtml(b.label)}</span>
-      <span class="${pillClass}">${escapeHtml(b.mode)}</span>
+      <span class="tag">${escapeHtml(b.mode)}</span>
     </div>
     <div class="card-body">
-      <div class="desc" style="margin-bottom:8px;">${escapeHtml(b.description)}</div>
+      <div class="desc" style="margin-bottom:6px;">${escapeHtml(b.description)}</div>
       ${body}
-      <button class="btn use-btn" style="margin-top:12px;">Use this backend</button>
+      <button class="btn use-btn" style="margin-top:10px;">Use this backend</button>
     </div>
   </div>`;
 }
