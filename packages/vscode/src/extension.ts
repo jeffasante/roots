@@ -59,6 +59,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("roots.startQuiz", (node?: CodemapNode) => startQuiz(node)),
     vscode.commands.registerCommand("roots.showBackends", () => showBackends()),
     vscode.commands.registerCommand("roots.selectModel", () => selectModel(context)),
+    vscode.commands.registerCommand("roots.setApiKey", () => setApiKey(context)),
     vscode.commands.registerCommand("roots.deleteCodemap", (node: CodemapNode) => deleteCodemap(node)),
     vscode.commands.registerCommand("roots.openLocation", (repoRoot: string, loc: Location) =>
       openLocation(repoRoot, loc)
@@ -200,7 +201,7 @@ async function selectModel(context: vscode.ExtensionContext): Promise<void> {
   }
 
   if (choice.requiresApiKey) {
-    const key = await resolveApiKey(context, { ...option, baseUrl });
+    const key = await resolveApiKey(context, { ...option, baseUrl }, { allowReplace: true });
     if (!key) {
       void vscode.window.showWarningMessage(`roots: ${option.label} needs an API key to be used.`);
       return;
@@ -288,11 +289,46 @@ async function pickBackend(context: vscode.ExtensionContext): Promise<BackendCon
   return { kind: option.kind, model, apiKey, baseUrl };
 }
 
-/** Retrieve a stored key from SecretStorage, prompting once if absent. */
-async function resolveApiKey(context: vscode.ExtensionContext, option: BackendOption): Promise<string | undefined> {
-  const secretKey = `roots.apiKey.${option.kind}.${option.baseUrl ?? "default"}`;
+/** SecretStorage key for a backend's API key (scoped by provider + base URL). */
+function secretKeyFor(option: Pick<BackendOption, "kind" | "baseUrl">): string {
+  return `roots.apiKey.${option.kind}.${option.baseUrl ?? "default"}`;
+}
+
+/**
+ * Retrieve a stored key from SecretStorage, prompting when absent.
+ *
+ * When `allowReplace` is set and a key already exists, the user is offered the
+ * chance to keep or replace it — otherwise a saved (possibly wrong) key would
+ * be impossible to change from the normal model-selection flow.
+ */
+async function resolveApiKey(
+  context: vscode.ExtensionContext,
+  option: BackendOption,
+  opts: { allowReplace?: boolean } = {}
+): Promise<string | undefined> {
+  const secretKey = secretKeyFor(option);
   const existing = await context.secrets.get(secretKey);
-  if (existing) return existing;
+
+  if (existing && !opts.allowReplace) return existing;
+
+  if (existing && opts.allowReplace) {
+    const action = await vscode.window.showQuickPick(
+      [
+        { label: "$(check) Keep current key", value: "keep" },
+        { label: "$(key) Replace key", value: "replace" },
+        { label: "$(trash) Remove key", value: "remove" },
+      ],
+      { placeHolder: `API key for ${option.label} — a key is already stored` }
+    );
+    if (!action) return existing; // cancelled → keep working with the current key
+    if (action.value === "keep") return existing;
+    if (action.value === "remove") {
+      await context.secrets.delete(secretKey);
+      void vscode.window.showInformationMessage(`roots: removed API key for ${option.label}.`);
+      return undefined;
+    }
+    // fall through to prompt for a replacement
+  }
 
   const entered = await vscode.window.showInputBox({
     prompt: `Enter API key for ${option.label} (stored securely)`,
@@ -301,6 +337,28 @@ async function resolveApiKey(context: vscode.ExtensionContext, option: BackendOp
   });
   if (entered) await context.secrets.store(secretKey, entered);
   return entered ?? undefined;
+}
+
+/**
+ * Explicit "set / update API key" command. Lets the user pick a provider and
+ * store, replace, or remove its key at any time — independent of model choice.
+ */
+async function setApiKey(context: vscode.ExtensionContext): Promise<void> {
+  if (!engine) return;
+  const options = (await engine.listBackends()).filter((o) => o.requiresApiKey && !o.customEndpoint);
+  const cfg = vscode.workspace.getConfiguration("roots");
+  const savedBaseUrl = cfg.get<string>("backend.baseUrl", "");
+
+  const picked = await vscode.window.showQuickPick(
+    options.map((o) => ({ label: o.label, description: o.description, option: o })),
+    { placeHolder: "Set API key for which provider?" }
+  );
+  if (!picked) return;
+
+  const option = picked.option;
+  const baseUrl = option.baseUrl ?? savedBaseUrl;
+  const key = await resolveApiKey(context, { ...option, baseUrl }, { allowReplace: true });
+  if (key) void vscode.window.showInformationMessage(`roots: API key saved for ${option.label}.`);
 }
 
 /** Show the catalog of inference backends roots can use ("click to view"). */
