@@ -25,6 +25,7 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   engine = new EngineClient(enginePath);
   CodemapPanel.configure((codemap, question) => askCodemap(context, codemap, question));
+  QuizPanel.configure(context.extensionUri);
   const FAVORITES_KEY = "roots.favorites";
   const readFavorites = () => context.globalState.get<string[]>(FAVORITES_KEY, []);
   codemapsView = new CodemapsViewProvider({
@@ -171,14 +172,27 @@ async function selectModel(context: vscode.ExtensionContext): Promise<void> {
     { placeHolder: "Select the backend roots should use" }
   );
   if (!picked) return;
-  const option: BackendOption = picked.option;
+  let option: BackendOption = picked.option;
+
+  // Custom OpenAI-compatible endpoint: ask for the base URL, then treat it like
+  // any other preset from here on (key + model resolution keyed by this URL).
+  if (option.customEndpoint) {
+    const baseUrl = await promptForBaseUrl(currentBaseUrl);
+    if (!baseUrl) return;
+    option = { ...option, baseUrl };
+  }
 
   const model = await chooseModel(option, {
     currentKind,
     currentModel,
     currentBaseUrl,
   });
-  if (model === undefined) return;
+  if (model === undefined || model.trim() === "") {
+    if (option.customEndpoint) {
+      void vscode.window.showWarningMessage("roots: a model id is required for a custom endpoint.");
+    }
+    return;
+  }
 
   if (option.requiresApiKey) {
     const key = await resolveApiKey(context, option);
@@ -193,6 +207,26 @@ async function selectModel(context: vscode.ExtensionContext): Promise<void> {
   await cfg.update("backend.baseUrl", option.baseUrl ?? "", vscode.ConfigurationTarget.Workspace);
   await refreshCodemaps();
   void vscode.window.showInformationMessage(`roots: using ${option.label} · ${model}`);
+}
+
+/**
+ * Ask for an OpenAI-compatible base URL (e.g. a self-hosted gateway or a
+ * provider we don't ship a preset for). Validates it's an http(s) URL and
+ * normalizes a trailing slash. Returns undefined if cancelled.
+ */
+async function promptForBaseUrl(prefill: string): Promise<string | undefined> {
+  const entered = await vscode.window.showInputBox({
+    prompt: "OpenAI-compatible base URL (e.g. https://api.example.com/v1)",
+    placeHolder: "https://api.example.com/v1",
+    value: prefill || "https://",
+    ignoreFocusOut: true,
+    validateInput: (v) => {
+      const t = v.trim();
+      if (!/^https?:\/\/.+/i.test(t)) return "Enter a full http(s) URL, e.g. https://api.example.com/v1";
+      return undefined;
+    },
+  });
+  return entered?.trim().replace(/\/+$/, "") || undefined;
 }
 
 /**
@@ -250,14 +284,26 @@ async function pickBackend(context: vscode.ExtensionContext): Promise<BackendCon
   const savedBaseUrl = cfg.get<string>("backend.baseUrl", "");
   let option = options.find((o) => o.kind === savedKind && (o.baseUrl ?? "") === savedBaseUrl);
 
+  // A saved custom endpoint won't match any preset (presets have no baseUrl or a
+  // different one). Reconstruct it from config so previously-chosen custom
+  // providers keep working without re-prompting.
+  if (!option && savedKind && savedBaseUrl) {
+    const custom = options.find((o) => o.customEndpoint);
+    option = { ...(custom ?? { kind: savedKind as BackendOption["kind"], label: savedBaseUrl, description: "Custom · OpenAI-compatible", mode: "cloud", requiresApiKey: true, defaultModel: savedModel }), baseUrl: savedBaseUrl };
+  }
+
   if (!option) {
     const picked = await vscode.window.showQuickPick(
-      options.map((o) => ({
-        label: o.label,
-        description: o.description,
-        detail: `default model: ${o.defaultModel}`,
-        option: o,
-      })),
+      options
+        // The bare custom option is only useful via selectModel (it needs a URL
+        // prompt); hide it from this fallback picker to avoid a URL-less choice.
+        .filter((o) => !o.customEndpoint)
+        .map((o) => ({
+          label: o.label,
+          description: o.description,
+          detail: `default model: ${o.defaultModel}`,
+          option: o,
+        })),
       { placeHolder: "Choose an inference backend" }
     );
     if (!picked) return undefined;

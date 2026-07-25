@@ -22,6 +22,11 @@ export interface BackendOption {
   models?: { id: string; label: string; note?: string }[];
   /** Optional preset base URL for OpenAI-compatible providers. */
   baseUrl?: string;
+  /**
+   * When true this option has no fixed endpoint — the picker prompts the user
+   * for a base URL (e.g. any self-hosted OpenAI-compatible gateway).
+   */
+  customEndpoint?: boolean;
 }
 
 /**
@@ -73,12 +78,85 @@ export const BACKEND_OPTIONS: BackendOption[] = [
   },
   {
     kind: "openai",
+    label: "DeepSeek",
+    description: "Cloud · OpenAI-compatible · DeepSeek API key",
+    mode: "cloud",
+    requiresApiKey: true,
+    defaultModel: "deepseek-chat",
+    baseUrl: "https://api.deepseek.com/v1",
+    models: [
+      { id: "deepseek-chat", label: "DeepSeek V3 (chat)", note: "general · recommended" },
+      { id: "deepseek-reasoner", label: "DeepSeek R1 (reasoner)", note: "reasoning · slower" },
+    ],
+  },
+  {
+    kind: "openai",
     label: "Groq",
     description: "Cloud · OpenAI-compatible · Groq API key",
     mode: "cloud",
     requiresApiKey: true,
     defaultModel: "llama-3.3-70b-versatile",
     baseUrl: "https://api.groq.com/openai/v1",
+    models: [
+      { id: "llama-3.3-70b-versatile", label: "Llama 3.3 70B Versatile", note: "recommended" },
+      { id: "llama-3.1-8b-instant", label: "Llama 3.1 8B Instant", note: "fast" },
+      { id: "openai/gpt-oss-120b", label: "GPT-OSS 120B", note: "MoE reasoning" },
+      { id: "moonshotai/kimi-k2-instruct", label: "Kimi K2 Instruct", note: "long-horizon coding" },
+      { id: "qwen/qwen3-32b", label: "Qwen3 32B", note: "reasoning" },
+    ],
+  },
+  {
+    kind: "openai",
+    label: "Mistral",
+    description: "Cloud · OpenAI-compatible · Mistral API key",
+    mode: "cloud",
+    requiresApiKey: true,
+    defaultModel: "mistral-large-latest",
+    baseUrl: "https://api.mistral.ai/v1",
+    models: [
+      { id: "mistral-large-latest", label: "Mistral Large", note: "reasoning · recommended" },
+      { id: "codestral-latest", label: "Codestral", note: "code-specialized" },
+      { id: "mistral-small-latest", label: "Mistral Small", note: "fast" },
+    ],
+  },
+  {
+    kind: "openai",
+    label: "Together AI",
+    description: "Cloud · OpenAI-compatible · Together API key",
+    mode: "cloud",
+    requiresApiKey: true,
+    defaultModel: "deepseek-ai/DeepSeek-V3",
+    baseUrl: "https://api.together.xyz/v1",
+    models: [
+      { id: "deepseek-ai/DeepSeek-V3", label: "DeepSeek V3", note: "recommended" },
+      { id: "Qwen/Qwen2.5-Coder-32B-Instruct", label: "Qwen2.5 Coder 32B", note: "code-specialized" },
+      { id: "meta-llama/Llama-3.3-70B-Instruct-Turbo", label: "Llama 3.3 70B Turbo", note: "general" },
+    ],
+  },
+  {
+    kind: "openai",
+    label: "OpenRouter",
+    description: "Cloud · OpenAI-compatible · OpenRouter API key · any model",
+    mode: "cloud",
+    requiresApiKey: true,
+    defaultModel: "deepseek/deepseek-chat",
+    baseUrl: "https://openrouter.ai/api/v1",
+    models: [
+      { id: "deepseek/deepseek-chat", label: "DeepSeek V3", note: "recommended" },
+      { id: "anthropic/claude-3.5-sonnet", label: "Claude 3.5 Sonnet", note: "strong reasoning" },
+      { id: "google/gemini-2.0-flash-001", label: "Gemini 2.0 Flash", note: "fast" },
+      { id: "qwen/qwen-2.5-coder-32b-instruct", label: "Qwen2.5 Coder 32B", note: "code-specialized" },
+    ],
+  },
+  {
+    kind: "openai",
+    label: "Custom (OpenAI-compatible)",
+    description: "Cloud · bring any OpenAI-compatible endpoint + key",
+    mode: "cloud",
+    requiresApiKey: true,
+    defaultModel: "",
+    // No baseUrl preset: the picker prompts for the endpoint when this is chosen.
+    customEndpoint: true,
   },
   {
     kind: "ollama",

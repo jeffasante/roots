@@ -11,6 +11,7 @@ export interface BackendOption {
   defaultModel: string;
   models?: { id: string; label: string; note?: string }[];
   baseUrl?: string;
+  customEndpoint?: boolean;
 }
 
 export interface BackendConfig {
