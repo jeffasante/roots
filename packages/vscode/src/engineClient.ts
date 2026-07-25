@@ -39,6 +39,13 @@ export interface Trace {
   locations: Location[];
   children?: string[];
   confidence?: Confidence;
+  focus?: boolean;
+}
+export interface DiagramEdge {
+  from: string;
+  to: string;
+  label?: string;
+  condition?: string;
 }
 export interface Codemap {
   version: string;
@@ -50,6 +57,7 @@ export interface Codemap {
   repo: { root: string; commit?: string };
   traces: Trace[];
   diagram?: { format: "mermaid"; content: string };
+  edges?: DiagramEdge[];
 }
 
 export interface ProgressEvent {

@@ -45,6 +45,11 @@
     "diagram": {
       "$ref": "#/definitions/Diagram"
     },
+    "edges": {
+      "type": "array",
+      "description": "Grounded relationships between traces used to render labeled diagram edges. Optional; legacy codemaps had only bare arrows.",
+      "items": { "$ref": "#/definitions/DiagramEdge" }
+    },
     "log": {
       "type": "array",
       "description": "Optional structured record of every tool call the agent made while producing this codemap. Used for eval/debugging.",
@@ -147,6 +152,10 @@
         },
         "confidence": {
           "$ref": "#/definitions/Confidence"
+        },
+        "focus": {
+          "type": "boolean",
+          "description": "True for the single entry-point node this query is most directly about. Rendered with an accent border."
         }
       }
     },
@@ -186,6 +195,30 @@
         "content": {
           "type": "string",
           "description": "Raw diagram source."
+        }
+      }
+    },
+    "DiagramEdge": {
+      "type": "object",
+      "required": ["from", "to"],
+      "additionalProperties": false,
+      "description": "A grounded relationship between two traces, rendered as a labeled diagram edge.",
+      "properties": {
+        "from": {
+          "type": "string",
+          "description": "Source trace id."
+        },
+        "to": {
+          "type": "string",
+          "description": "Target trace id."
+        },
+        "label": {
+          "type": "string",
+          "description": "Verb phrase describing what flows between the two nodes (e.g. 'dispatches to')."
+        },
+        "condition": {
+          "type": "string",
+          "description": "Code condition under which the edge applies (e.g. 'if TurboQuant')."
         }
       }
     },

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { assessCodemapQuality, normalizeDiagram, sanitizeMermaid } from "./agent.js";
-import type { Trace } from "./types.js";
+import type { DiagramEdge, Trace } from "./types.js";
 
 const location = { file: "src/server.ts", start_line: 1, end_line: 4 };
 
@@ -68,7 +68,7 @@ test("diagram fallback groups sections and connects trace ids", () => {
 
   assert.match(diagram.content, /^flowchart TD/);
   assert.match(diagram.content, /subgraph Section1\["1\. RPC Server"\]/);
-  assert.match(diagram.content, /t1a\["1a\. Create server"\]/);
+  assert.match(diagram.content, /t1a\["1a: Create server"\]/);
   assert.match(diagram.content, /t1a --> t1b/);
   assert.match(diagram.content, /t1b --> t2a/);
 });
@@ -76,6 +76,42 @@ test("diagram fallback groups sections and connects trace ids", () => {
 test("valid model Mermaid is preserved", () => {
   const content = "flowchart LR\n  t1a --> t1b";
   assert.deepEqual(normalizeDiagram({ format: "mermaid", content }, []), { format: "mermaid", content });
+});
+
+test("diagram renders subgraphs, labeled/conditional edges, and confidence styling", () => {
+  // A small synthetic tree: 2 phases, 3 leaf nodes, one conditional branch,
+  // one low-confidence node, one focus node.
+  const verified = { location_verified: true, location_evidence: "symbol", summary_grounded: 0.9 } as const;
+  const lowConf = { location_verified: true, location_evidence: "file_line", summary_grounded: 0.2 } as const;
+  const traces: Trace[] = [
+    { id: "t1", title: "Encoding Selection", summary: "", locations: [location], children: ["t1a", "t1b"], confidence: verified },
+    { id: "t1a", title: "CLI encoding selection", summary: "", locations: [location], confidence: verified, focus: true },
+    { id: "t1b", title: "Metal storage dispatch", summary: "", locations: [location], confidence: lowConf },
+    { id: "t2", title: "TurboQuant", summary: "", locations: [location], children: ["t2a"], confidence: verified },
+    { id: "t2a", title: "Compress during write", summary: "", locations: [location], confidence: verified },
+  ];
+  const edges: DiagramEdge[] = [
+    { from: "t1a", to: "t1b", label: "dispatches to" },
+    { from: "t1b", to: "t2a", condition: "TurboQuant" },
+  ];
+
+  const diagram = normalizeDiagram(undefined, traces, edges);
+  const c = diagram.content;
+
+  // Subgraph grouping, one per top-level section.
+  assert.match(c, /subgraph Section1\["1\. Encoding Selection"\]/);
+  assert.match(c, /subgraph Section2\["2\. TurboQuant"\]/);
+  // Step-id labels derived from tree position.
+  assert.match(c, /t1a\["1a: CLI encoding selection"\]/);
+  assert.match(c, /t2a\["2a: Compress during write"\]/);
+  // Labeled edge and conditional edge (condition rendered as `if …`).
+  assert.match(c, /t1a -->\|"dispatches to"\| t1b/);
+  assert.match(c, /t1b -->\|"if TurboQuant"\| t2a/);
+  // Confidence-aware classDefs and their assignments.
+  assert.match(c, /classDef unverified/);
+  assert.match(c, /class t1b unverified;/);
+  assert.match(c, /classDef focus/);
+  assert.match(c, /class t1a focus;/);
 });
 
 test("sanitizeMermaid strips trailing whitespace after brackets", () => {

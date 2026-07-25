@@ -1,6 +1,6 @@
 import type { InferenceBackend } from "./backends/types.js";
 import { Tools } from "./tools.js";
-import type { Codemap, Diagram, LogEntry, Trace } from "./types.js";
+import type { Codemap, Diagram, DiagramEdge, LogEntry, Trace } from "./types.js";
 import { CODEMAP_VERSION } from "./types.js";
 import { verifyTrace } from "./verify.js";
 
@@ -77,10 +77,15 @@ Shape:
       "id": "t1a",
       "title": "Concrete sub-step",
       "summary": "What this specific code does and why it matters.",
-      "locations": [ { "file": "repo/relative/path", "start_line": 15, "end_line": 18 } ]
+      "locations": [ { "file": "repo/relative/path", "start_line": 15, "end_line": 18 } ],
+      "focus": true
     }
   ],
-  "diagram": { "format": "mermaid", "content": "flowchart TD\\n  subgraph Section1[\"1. Section title\"]\\n    t1a[\"1a. Concrete sub-step\"] --> t1b[\"1b. Next sub-step\"]\\n  end" }
+  "edges": [
+    { "from": "t1a", "to": "t1b", "label": "dispatches to" },
+    { "from": "t1b", "to": "t2a", "label": "allocates buffers for" },
+    { "from": "t1a", "to": "t3a", "condition": "if TurboQuant" }
+  ]
 }
 
 Rules:
@@ -91,7 +96,12 @@ Rules:
 - summaries are concrete and specific to the cited code — not generic. Order sections in execution/flow order; order children in the order they run.
 - Prose fields may use concise Markdown for emphasis, inline code, lists, and fenced code blocks. Do not emit raw HTML or Markdown headings.
 - overview is required and must reference several trace ids in [brackets].
-- diagram is required. Emit valid Mermaid flowchart TD syntax. Use one subgraph per top-level section, one node per child step, actual trace ids as node ids (for example t1a), displayed labels like "1a. Register handlers", arrows between sequential child nodes, and arrows connecting the last child of one section to the first child of the next. Do not use Mermaid click directives or HTML labels.`;
+- Mark exactly one trace with "focus": true — the single node this task is most directly about, i.e. where a reader should start. Usually the first entry-point child.
+- edges is required and drives the diagram. DO NOT emit a "diagram" field — the engine renders the Mermaid from your traces + edges. Instead give the real relationships:
+  - Each edge connects two trace ids (from/to) that you observed a real data- or control-flow relationship between in the code.
+  - "label": a concrete VERB PHRASE for what actually flows between them — "dispatches to", "allocates buffers for", "caches K in", "provides kernels for", "compresses during write". NEVER a placeholder like "connects to" or "relates to". If you cannot name a real relationship, do not emit the edge.
+  - "condition": ONLY when the target runs under a specific code condition you saw (an if/match/switch/feature flag), give that condition, e.g. "if TurboQuant". Do not guess conditions.
+  - Connect child steps within a section in execution order, and connect sections where one's output feeds the next. Every edge label must reference a relationship you actually found in the research log — this is a presentation of grounded flow, not a place to invent new claims.`;
 
 const REPAIR_SYSTEM = `${SYNTHESIS_SYSTEM}
 
@@ -181,6 +191,7 @@ export class Agent {
     // with no model call. Grounding (the probabilistic pass) is intentionally
     // NOT run here; callers invoke groundingPass() on a sampled subset.
     const traces = sanitized.map((t) => ({ ...t, confidence: verifyTrace(t, tools) }));
+    const edges = sanitizeEdges(parsed.edges, traces);
 
     return {
       version: CODEMAP_VERSION,
@@ -191,7 +202,8 @@ export class Agent {
       model: this.backend.meta,
       repo: { root: opts.repoRoot },
       traces,
-      diagram: normalizeDiagram(parsed.diagram, traces),
+      edges,
+      diagram: normalizeDiagram(parsed.diagram, traces, edges),
       log,
     };
   }
@@ -232,25 +244,71 @@ function parseToolCall(content: string): ToolCall | null {
 
 function parseSynthesis(
   content: string
-): { traces: Trace[]; diagram?: Codemap["diagram"]; overview?: string } {
+): { traces: Trace[]; edges: DiagramEdge[]; diagram?: Codemap["diagram"]; overview?: string } {
   const obj = extractJson(content);
   const traces = Array.isArray(obj?.traces) ? (obj!.traces as Trace[]) : [];
+  const edges = Array.isArray(obj?.edges) ? (obj!.edges as DiagramEdge[]) : [];
   const diagram =
     obj?.diagram && typeof obj.diagram === "object"
       ? (obj.diagram as Codemap["diagram"])
       : undefined;
   const overview =
     typeof obj?.overview === "string" && obj.overview.trim() ? obj.overview.trim() : undefined;
-  return { traces, diagram, overview };
+  return { traces, edges, diagram, overview };
 }
 
-export function normalizeDiagram(diagram: Codemap["diagram"] | undefined, traces: Trace[]): Diagram {
+/**
+ * Produce the diagram for a codemap. The engine — not the model — owns diagram
+ * structure and styling: grouping into subgraphs, stable step ids, labeled
+ * edges, and confidence-aware classes are all derived here from the trace tree,
+ * the (already grounded) edge labels, and the verification confidence stamped
+ * on each trace. This keeps diagram generation a pure PRESENTATION step,
+ * separate from the grounding pass, and guarantees a valid Mermaid string.
+ *
+ * A raw model-authored Mermaid string is still accepted for backward
+ * compatibility (older callers/tests pass one), but the structured builder is
+ * preferred whenever traces are available.
+ */
+export function normalizeDiagram(
+  diagram: Codemap["diagram"] | undefined,
+  traces: Trace[],
+  edges: DiagramEdge[] = []
+): Diagram {
+  if (traces.length > 0) {
+    const built = buildMermaidDiagram(traces, edges);
+    assertValidMermaid(built); // fail loudly here, not silently in the webview
+    return { format: "mermaid", content: built };
+  }
+  // Legacy path: no traces to build from, so lean on a model-authored diagram.
   const raw = diagram?.format === "mermaid" ? diagram.content?.trim() : "";
   if (raw && /^flowchart\s+(?:TD|TB|LR|RL|BT)\b/m.test(raw)) {
     const cleaned = sanitizeMermaid(raw);
     if (cleaned) return { format: "mermaid", content: cleaned };
   }
-  return { format: "mermaid", content: buildMermaidDiagram(traces) };
+  return { format: "mermaid", content: buildMermaidDiagram(traces, edges) };
+}
+
+/**
+ * Structural validity gate for generated Mermaid. A malformed diagram must fail
+ * at synthesis time, where it can be caught, not be silently persisted into the
+ * `.codemap` and blow up the webview render later. This is intentionally cheap
+ * and structural (balanced subgraph/end, a header, no empty node ids) — full
+ * grammar validation happens in the renderer.
+ */
+export function assertValidMermaid(content: string): void {
+  const lines = content.split("\n");
+  if (!/^flowchart\s+(?:TD|TB|LR|RL|BT)\b/.test(lines[0] ?? "")) {
+    throw new Error(`Generated diagram is not a flowchart: ${lines[0] ?? "<empty>"}`);
+  }
+  let depth = 0;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (/^subgraph\b/.test(trimmed)) depth++;
+    else if (trimmed === "end") depth--;
+    if (depth < 0) throw new Error("Generated diagram has an unmatched `end`");
+    if (/\[\s*""?\s*\]/.test(trimmed)) throw new Error(`Generated diagram has an empty node label: ${trimmed}`);
+  }
+  if (depth !== 0) throw new Error(`Generated diagram has ${depth} unclosed subgraph(s)`);
 }
 
 /**
@@ -298,27 +356,140 @@ function quoteBracketLabels(line: string): string {
   );
 }
 
-function buildMermaidDiagram(traces: Trace[]): string {
+/**
+ * The stable, human-facing step id for a node derived from its position in the
+ * trace tree (section number + child letter): `1a`, `1b`, `2a`. This is a
+ * display id only — the trace's UUID stays the identity in the `.codemap`. Kept
+ * separate so re-ordering never changes a trace's identity, only its label.
+ */
+interface StepInfo {
+  /** 1-based index of the enclosing top-level section. */
+  section: number;
+  /** Display id: `2` for a bare section node, `2a`/`2b` for children. */
+  stepId: string;
+}
+
+function computeStepIds(roots: Trace[], byId: Map<string, Trace>): Map<string, StepInfo> {
+  const steps = new Map<string, StepInfo>();
+  roots.forEach((root, sectionIndex) => {
+    const section = sectionIndex + 1;
+    const children = (root.children ?? [])
+      .map((id) => byId.get(id))
+      .filter((t): t is Trace => Boolean(t));
+    if (children.length > 0) {
+      steps.set(root.id, { section, stepId: String(section) });
+      children.forEach((child, i) => {
+        steps.set(child.id, { section, stepId: `${section}${String.fromCharCode(97 + i)}` });
+      });
+    } else {
+      steps.set(root.id, { section, stepId: String(section) });
+    }
+  });
+  return steps;
+}
+
+/** A node is "unverified" when the deterministic pass could not confirm its
+ * location, or grounding scored it low. Rendered with a dashed border so a
+ * reader can see at a glance which parts of the map to trust less. */
+function isUnverified(trace: Trace): boolean {
+  const c = trace.confidence;
+  if (!c) return true; // no verification recorded → treat as unverified
+  if (!c.location_verified) return true;
+  if (typeof c.summary_grounded === "number" && c.summary_grounded < 0.5) return true;
+  return false;
+}
+
+/** Sanitize a model-supplied edge label/condition for use inside `-->|"…"|`. */
+function edgeLabel(edge: DiagramEdge): string | undefined {
+  const text = edge.condition ? `if ${edge.condition.replace(/^if\s+/i, "")}` : edge.label;
+  if (!text) return undefined;
+  return mermaidLabel(text);
+}
+
+function buildMermaidDiagram(traces: Trace[], edges: DiagramEdge[] = []): string {
   const byId = new Map(traces.map((trace) => [trace.id, trace]));
   const childIds = new Set(traces.flatMap((trace) => trace.children ?? []));
   const roots = traces.filter((trace) => !childIds.has(trace.id));
+  const steps = computeStepIds(roots, byId);
+
   const lines = ["flowchart TD"];
-  let previousLast: string | undefined;
+  const unverified: string[] = [];
+  const focus: string[] = [];
+  const phaseAssignments: Array<{ id: string; phase: number }> = [];
 
   roots.forEach((root, sectionIndex) => {
-    const sectionLabel = sectionIndex + 1;
-    const children = (root.children ?? []).map((id) => byId.get(id)).filter((trace): trace is Trace => Boolean(trace));
+    const section = sectionIndex + 1;
+    const children = (root.children ?? [])
+      .map((id) => byId.get(id))
+      .filter((t): t is Trace => Boolean(t));
     const nodes = children.length > 0 ? children : [root];
-    lines.push(`  subgraph Section${sectionLabel}["${sectionLabel}. ${mermaidLabel(root.title)}"]`);
-    nodes.forEach((trace, stepIndex) => {
-      const label = children.length > 0 ? `${sectionLabel}${String.fromCharCode(97 + stepIndex)}` : String(sectionLabel);
-      lines.push(`    ${mermaidId(trace.id)}["${label}. ${mermaidLabel(trace.title)}"]`);
-      if (stepIndex > 0) lines.push(`    ${mermaidId(nodes[stepIndex - 1].id)} --> ${mermaidId(trace.id)}`);
+
+    lines.push(`  subgraph Section${section}["${section}. ${mermaidLabel(root.title)}"]`);
+    nodes.forEach((trace) => {
+      const id = mermaidId(trace.id);
+      const step = steps.get(trace.id)?.stepId ?? String(section);
+      lines.push(`    ${id}["${step}: ${mermaidLabel(trace.title)}"]`);
+      phaseAssignments.push({ id, phase: section });
+      if (isUnverified(trace)) unverified.push(id);
+      if (trace.focus) focus.push(id);
     });
     lines.push("  end");
-    if (previousLast) lines.push(`  ${previousLast} --> ${mermaidId(nodes[0].id)}`);
-    previousLast = mermaidId(nodes[nodes.length - 1].id);
   });
+
+  // Edges. Prefer the model's grounded relationships; if none were supplied,
+  // fall back to a simple sequential flow so a diagram still renders.
+  const drawn = new Set<string>();
+  const emit = (from: string, to: string, label?: string) => {
+    const key = `${from}->${to}`;
+    if (drawn.has(key)) return;
+    drawn.add(key);
+    lines.push(label ? `  ${from} -->|"${label}"| ${to}` : `  ${from} --> ${to}`);
+  };
+
+  if (edges.length > 0) {
+    for (const edge of edges) {
+      if (!byId.has(edge.from) || !byId.has(edge.to)) continue;
+      emit(mermaidId(edge.from), mermaidId(edge.to), edgeLabel(edge));
+    }
+  } else {
+    // Legacy fallback: chain children within a section, then link sections.
+    let previousLast: string | undefined;
+    roots.forEach((root) => {
+      const children = (root.children ?? [])
+        .map((id) => byId.get(id))
+        .filter((t): t is Trace => Boolean(t));
+      const nodes = children.length > 0 ? children : [root];
+      nodes.forEach((trace, i) => {
+        if (i > 0) emit(mermaidId(nodes[i - 1].id), mermaidId(trace.id));
+      });
+      if (previousLast) emit(previousLast, mermaidId(nodes[0].id));
+      previousLast = mermaidId(nodes[nodes.length - 1].id);
+    });
+  }
+
+  // Phase fills give each section a distinct, muted background so groups read
+  // as groups. Palette is restrained per the project's UI direction.
+  const phaseColors = ["#26339F", "#020C8D", "#3B4BC0", "#5A67D8", "#7C89E8", "#9AA5F0"];
+  const usedPhases = [...new Set(phaseAssignments.map((p) => p.phase))];
+  for (const phase of usedPhases) {
+    const color = phaseColors[(phase - 1) % phaseColors.length];
+    lines.push(`  classDef phase${phase} fill:${color},stroke:${color},color:#FFFFFF;`);
+  }
+  for (const { id, phase } of phaseAssignments) {
+    lines.push(`  class ${id} phase${phase};`);
+  }
+
+  // Confidence-aware overrides applied last so they win over the phase fill:
+  //  - unverified: dashed border, signalling "trust this less".
+  //  - focus: gold accent border on the single entry-point node.
+  if (unverified.length > 0) {
+    lines.push("  classDef unverified stroke-dasharray:4 3,stroke:#EA3D27;");
+    lines.push(`  class ${unverified.join(",")} unverified;`);
+  }
+  if (focus.length > 0) {
+    lines.push("  classDef focus stroke:#F5A623,stroke-width:3px;");
+    lines.push(`  class ${focus.join(",")} focus;`);
+  }
 
   return lines.join("\n");
 }
@@ -357,7 +528,36 @@ function sanitizeTraces(traces: Trace[], tools: Tools): Trace[] {
           end_line: Math.max(Math.floor(l.start_line), Math.floor(l.end_line)),
         })),
       children: Array.isArray(t.children) ? t.children.map(String) : undefined,
+      focus: t.focus === true ? true : undefined,
     }));
+}
+
+/**
+ * Keep only edges that connect two real, distinct traces and carry a concrete
+ * relationship (a label or a condition). Placeholder labels like "connects to"
+ * are dropped: an edge with nothing real to say shouldn't be drawn. Edges are a
+ * presentation of already-grounded flow, so no model/verification pass runs on
+ * them here — only structural validity is enforced.
+ */
+const PLACEHOLDER_LABELS = new Set(["connects to", "relates to", "related to", "links to", "goes to", "next"]);
+
+function sanitizeEdges(edges: DiagramEdge[], traces: Trace[]): DiagramEdge[] {
+  const ids = new Set(traces.map((t) => t.id));
+  const seen = new Set<string>();
+  const clean: DiagramEdge[] = [];
+  for (const e of Array.isArray(edges) ? edges : []) {
+    if (!e || typeof e.from !== "string" || typeof e.to !== "string") continue;
+    if (e.from === e.to || !ids.has(e.from) || !ids.has(e.to)) continue;
+    const condition = typeof e.condition === "string" && e.condition.trim() ? e.condition.trim() : undefined;
+    const rawLabel = typeof e.label === "string" ? e.label.trim() : "";
+    const label = rawLabel && !PLACEHOLDER_LABELS.has(rawLabel.toLowerCase()) ? rawLabel : undefined;
+    if (!label && !condition) continue; // nothing real to say → don't draw it
+    const key = `${e.from}->${e.to}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    clean.push({ from: e.from, to: e.to, label, condition });
+  }
+  return clean;
 }
 
 interface CodemapQuality {

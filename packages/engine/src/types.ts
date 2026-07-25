@@ -64,11 +64,46 @@ export interface Trace {
   children?: string[];
   /** Optional: absent on legacy codemaps produced before the verification pass. */
   confidence?: Confidence;
+  /**
+   * True for the single node this query is most directly about — the place to
+   * start reading. Rendered with a distinct accent (classDef focus) so the
+   * diagram visually answers "where do I begin". At most one trace is focus.
+   */
+  focus?: boolean;
 }
 
 export interface Diagram {
   format: "mermaid";
   content: string;
+}
+
+/**
+ * A grounded relationship between two traces, used to render labeled edges in
+ * the diagram. The model supplies the label/condition from data or control flow
+ * it actually observed during research; the engine owns everything structural
+ * (which nodes group into which subgraph, step ids, confidence styling). Labels
+ * are a PRESENTATION concern — they must only describe relationships the agent
+ * already extracted while building traces, never new claims invented at render
+ * time — so they are not sent through the grounding pass.
+ */
+export interface DiagramEdge {
+  /** Source trace id (matches a Trace.id). */
+  from: string;
+  /** Target trace id (matches a Trace.id). */
+  to: string;
+  /**
+   * Verb phrase describing what actually flows between the two nodes, e.g.
+   * "dispatches to", "allocates buffers for", "caches K in". Never a generic
+   * placeholder like "connects to"/"relates to" — absence of a real label means
+   * the two traces should not be directly connected.
+   */
+  label?: string;
+  /**
+   * When the edge only applies under a code condition (feature flag, runtime
+   * branch, match arm), the condition itself, e.g. "if TurboQuant". Must be a
+   * real condition the agent observed; rendered as the edge label.
+   */
+  condition?: string;
 }
 
 export interface LogEntry {
@@ -90,6 +125,11 @@ export interface Codemap {
   repo: RepoMeta;
   traces: Trace[];
   diagram?: Diagram;
+  /**
+   * Grounded relationships used to render labeled diagram edges. Optional so
+   * legacy codemaps (which had only bare arrows) still validate.
+   */
+  edges?: DiagramEdge[];
   log?: LogEntry[];
 }
 
