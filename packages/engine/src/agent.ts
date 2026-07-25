@@ -245,11 +245,57 @@ function parseSynthesis(
 }
 
 export function normalizeDiagram(diagram: Codemap["diagram"] | undefined, traces: Trace[]): Diagram {
-  const content = diagram?.format === "mermaid" ? diagram.content?.trim() : "";
-  if (content && /^flowchart\s+(?:TD|TB|LR|RL|BT)\b/m.test(content)) {
-    return { format: "mermaid", content };
+  const raw = diagram?.format === "mermaid" ? diagram.content?.trim() : "";
+  if (raw && /^flowchart\s+(?:TD|TB|LR|RL|BT)\b/m.test(raw)) {
+    const cleaned = sanitizeMermaid(raw);
+    if (cleaned) return { format: "mermaid", content: cleaned };
   }
   return { format: "mermaid", content: buildMermaidDiagram(traces) };
+}
+
+/**
+ * Repair the small set of Mermaid mistakes models reliably make, so a valid
+ * codemap isn't thrown away over cosmetic syntax. Returns undefined only if
+ * the result no longer looks like a flowchart (then we fall back to the
+ * deterministic builder).
+ *
+ * Fixes, in order:
+ *   1. Trailing whitespace after `]`/`)`/text — Mermaid's `subgraph` grammar is
+ *      whitespace-sensitive and `] \n` is a hard parse error.
+ *   2. Unquoted bracket labels containing spaces/dots/punctuation — e.g.
+ *      `subgraph S[1. Metal Backend]` or `t1a[1a. Load GDN Library]` must be
+ *      `["…"]` or Mermaid rejects them. Already-quoted labels are left alone.
+ *   3. Blank lines inside the graph body, which some renderers dislike.
+ */
+export function sanitizeMermaid(content: string): string | undefined {
+  const lines = content
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => line.replace(/\s+$/, "")) // fix (1): kill trailing whitespace
+    .filter((line, i) => i === 0 || line.trim() !== ""); // fix (3): drop blank body lines
+
+  const quoted = lines.map((line) => quoteBracketLabels(line));
+  const result = quoted.join("\n").trim();
+  return /^flowchart\s+(?:TD|TB|LR|RL|BT)\b/m.test(result) ? result : undefined;
+}
+
+/**
+ * Wrap `[label]` / `(label)` / `{label}` node text in quotes when it contains
+ * characters Mermaid can't parse bare (spaces, dots, punctuation) and isn't
+ * already quoted. Leaves shape delimiters and already-quoted labels intact.
+ */
+function quoteBracketLabels(line: string): string {
+  // Matches an id followed by an opening shape delimiter and its label:
+  //   subgraph Foo[1. Bar]   |   t1a[1a. Load]   |   n(round)   |   d{decision}
+  return line.replace(
+    /([A-Za-z_][\w]*\s*)([\[\(\{])([^"\]\)\}][^\]\)\}]*)([\]\)\}])/g,
+    (whole, prefix, open, label, close) => {
+      const trimmed = label.trim();
+      if (trimmed.startsWith('"') && trimmed.endsWith('"')) return whole; // already quoted
+      const needsQuoting = /[^\w]/.test(trimmed); // spaces, dots, punctuation, etc.
+      return needsQuoting ? `${prefix}${open}"${trimmed}"${close}` : whole;
+    }
+  );
 }
 
 function buildMermaidDiagram(traces: Trace[]): string {

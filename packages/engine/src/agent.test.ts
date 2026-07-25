@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { assessCodemapQuality, normalizeDiagram } from "./agent.js";
+import { assessCodemapQuality, normalizeDiagram, sanitizeMermaid } from "./agent.js";
 import type { Trace } from "./types.js";
 
 const location = { file: "src/server.ts", start_line: 1, end_line: 4 };
@@ -76,4 +76,35 @@ test("diagram fallback groups sections and connects trace ids", () => {
 test("valid model Mermaid is preserved", () => {
   const content = "flowchart LR\n  t1a --> t1b";
   assert.deepEqual(normalizeDiagram({ format: "mermaid", content }, []), { format: "mermaid", content });
+});
+
+test("sanitizeMermaid strips trailing whitespace after brackets", () => {
+  // The exact failure mode from the reported issue: `] \n` before a newline.
+  const broken = "flowchart TD\n  subgraph S[1. Init] \n    t1a[1a. Load GDN Library] \n  end";
+  const fixed = sanitizeMermaid(broken)!;
+  assert.ok(!/\]\s+\n/.test(fixed + "\n"), "no trailing space after a bracket");
+  assert.match(fixed, /subgraph S\["1\. Init"\]/);
+  assert.match(fixed, /t1a\["1a\. Load GDN Library"\]/);
+});
+
+test("sanitizeMermaid quotes unquoted bracket labels with spaces and dots", () => {
+  const broken = "flowchart TD\n  subgraph MetalBackendInit[1. Metal Backend Initialization]\n    t1a[1a. Load GDN Library] --> t1b[1b. Compile GDN Kernels]\n  end";
+  const fixed = sanitizeMermaid(broken)!;
+  assert.match(fixed, /subgraph MetalBackendInit\["1\. Metal Backend Initialization"\]/);
+  assert.match(fixed, /t1a\["1a\. Load GDN Library"\] --> t1b\["1b\. Compile GDN Kernels"\]/);
+});
+
+test("sanitizeMermaid leaves already-quoted labels untouched", () => {
+  const good = 'flowchart TD\n  subgraph S["1. Init"]\n    t1a["1a. Load"] --> t1b["1b. Next"]\n  end';
+  assert.equal(sanitizeMermaid(good), good);
+});
+
+test("normalizeDiagram repairs a model diagram instead of discarding it", () => {
+  // Reproduces the issue payload's diagram.content shape.
+  const content =
+    "flowchart TD\n  subgraph MetalBackendInit[1. Metal Backend Initialization] \n    t1a[1a. Load GDN Library] --> t1b[1b. Compile GDN Kernels] \n  end\n  \n  t1b --> t2a";
+  const result = normalizeDiagram({ format: "mermaid", content }, []);
+  assert.match(result.content, /subgraph MetalBackendInit\["1\. Metal Backend Initialization"\]/);
+  assert.ok(!/\]\s+\n/.test(result.content + "\n"), "trailing bracket whitespace removed");
+  assert.ok(!/^\s*$/m.test(result.content.split("\n").slice(1).join("\n")), "no blank body lines");
 });
