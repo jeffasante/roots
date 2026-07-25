@@ -68,4 +68,4 @@ Use **roots: Models** (the toolbar button in the roots view) to pick a backend. 
 
 ## License
 
-MIT © Jeff Asante
+Apache-2.0 © Jeff Asante

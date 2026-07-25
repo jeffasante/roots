@@ -4,7 +4,7 @@
   "description": "Generate AI-annotated, task-specific codemaps of your codebase.",
   "version": "0.1.1",
   "publisher": "jeffasante",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "icon": "media/roots-icon.png",
   "repository": {
     "type": "git",
