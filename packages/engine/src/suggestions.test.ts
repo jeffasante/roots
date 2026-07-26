@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseSuggestions, rankHubs, isBarrelOrTypeOnly, repoFileInventory } from "./suggestions.js";
+import { parseSuggestions, rankHubs, isBarrelOrTypeOnly, repoFileInventory, repoRelevantFiles } from "./suggestions.js";
 import { Tools } from "./tools.js";
 
 function withRepo(files: Record<string, string>, run: (tools: Tools) => void): void {
@@ -162,6 +162,98 @@ test("repoFileInventory lists real source files grouped by extension", () => {
 test("repoFileInventory returns empty string for a repo with no source files", () => {
   withRepo({ "README.md": "# docs", "data.json": "{}" }, (tools) => {
     assert.equal(repoFileInventory(tools), "");
+  });
+});
+
+test("repoFileInventory pins deep query-relevant files above the per-language cap", () => {
+  // 60 shallow .rs files would push a deep, relevant file past the 40-per-language
+  // cap. With a query, the relevant file must still be surfaced first.
+  const files: Record<string, string> = {};
+  for (let i = 0; i < 60; i++) files[`src/mod${i}.rs`] = "fn f() {}";
+  files["crates/cellm-cache/src/pagetable.rs"] = "pub struct PageTable {}";
+
+  withRepo(files, (tools) => {
+    const relevant = repoFileInventory(tools, "how does the page table allocate blocks");
+    assert.match(relevant, /Files matching your task/);
+    assert.match(relevant, /crates\/cellm-cache\/src\/pagetable\.rs/);
+    // The pinned section comes before the grouped extension list.
+    assert.ok(
+      relevant.indexOf("pagetable.rs") < relevant.indexOf(".rs ("),
+      "relevant file should be pinned above the grouped list"
+    );
+  });
+});
+
+test("repoRelevantFiles ranks the deep owning file ahead of generic matches", () => {
+  withRepo(
+    {
+      "bindings/ios/CellmDemo/ModelDataProcessor.swift": "protocol ModelDataProcessor {}",
+      "crates/cellm-cache/src/kvcache.rs": "pub struct KVCache;",
+      "crates/cellm-cache/src/pagetable.rs": "pub struct PageTable;",
+      "crates/cellm-cache/src/allocator.rs": "pub struct BlockAllocator;",
+    },
+    (tools) => {
+      const files = repoRelevantFiles(
+        tools,
+        "Cellm Cache Page Table Logic: Token Block Allocation, Offset Calculation, and Truncation"
+      );
+      assert.equal(files[0], "crates/cellm-cache/src/pagetable.rs");
+      assert.ok(files.includes("crates/cellm-cache/src/allocator.rs"));
+      assert.ok(files.includes("crates/cellm-cache/src/kvcache.rs"));
+      assert.ok(!files.some((file) => file.endsWith(".swift")));
+    }
+  );
+});
+
+test("repoRelevantFiles discounts the product-name token so it does not float unrelated files", () => {
+  // "cellm" appears in most paths (product name) → non-discriminating. The real
+  // discriminators are "pagetable"/"allocator". Kotlin bindings that only match
+  // the product name must not outrank the owning Rust files.
+  const files: Record<string, string> = {
+    "crates/cellm-cache/src/pagetable.rs": "pub struct PageTable;",
+    "crates/cellm-cache/src/allocator.rs": "pub struct BlockAllocator;",
+  };
+  // A large binding tree whose paths all carry the product name "cellm".
+  for (let i = 0; i < 12; i++) {
+    files[`bindings/kotlin/src/main/kotlin/com/cellm/sdk/Cellm${i}.kt`] = "class Cellm";
+  }
+  files["bindings/kotlin/src/main/kotlin/com/cellm/sdk/CellmTokenizer.kt"] = "class CellmTokenizer";
+
+  withRepo(files, (tools) => {
+    const relevant = repoRelevantFiles(
+      tools,
+      "Cellm Cache Page Table Logic: Token Block Allocation, Offset Calculation, and Truncation"
+    );
+    assert.deepEqual(relevant.slice(0, 2), [
+      "crates/cellm-cache/src/pagetable.rs",
+      "crates/cellm-cache/src/allocator.rs",
+    ]);
+    // Files that match ONLY the discounted product name ("cellm") must not
+    // qualify as relevant — their score is below threshold once discounted.
+    assert.ok(
+      !relevant.some((file) => /\/Cellm\d+\.kt$/.test(file)),
+      "product-name-only Kotlin bindings should not rank as relevant"
+    );
+  });
+});
+
+test("repoRelevantFiles reaches relevant files beyond the first 500 source files", () => {
+  const files: Record<string, string> = {};
+  for (let i = 0; i < 520; i++) {
+    files[`bindings/ios/Generated/File${String(i).padStart(3, "0")}.swift`] = "struct Generated {}";
+  }
+  files["crates/cellm-cache/src/pagetable.rs"] = "pub struct PageTable {}";
+  files["crates/cellm-cache/src/allocator.rs"] = "pub struct BlockAllocator {}";
+
+  withRepo(files, (tools) => {
+    const relevant = repoRelevantFiles(
+      tools,
+      "Cellm Cache Page Table Logic: Token Block Allocation, Offset Calculation, and Truncation"
+    );
+    assert.deepEqual(relevant.slice(0, 2), [
+      "crates/cellm-cache/src/pagetable.rs",
+      "crates/cellm-cache/src/allocator.rs",
+    ]);
   });
 });
 

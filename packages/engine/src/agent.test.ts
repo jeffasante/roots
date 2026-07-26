@@ -37,9 +37,9 @@ test("quality gate accepts a grouped grounded codemap", () => {
       title: `Phase ${section}`,
       summary: `Explains phase ${section}.`,
       locations: [location],
-      children: [`t${section}a`, `t${section}b`],
+      children: [`t${section}a`, `t${section}b`, `t${section}c`],
     });
-    for (const suffix of ["a", "b"]) {
+    for (const suffix of ["a", "b", "c"]) {
       traces.push({
         id: `t${section}${suffix}`,
         title: `Action ${section}${suffix}`,
@@ -53,6 +53,37 @@ test("quality gate accepts a grouped grounded codemap", () => {
     "The request enters through server registration [t1a], moves through backend construction [t2a], and finishes in verified persistence [t3b]. Each phase follows the concrete runtime path.";
 
   assert.deepEqual(assessCodemapQuality(overview, traces), { ok: true, issues: [] });
+});
+
+test("quality gate rejects speculative, ungrounded narration", () => {
+  const traces: Trace[] = [];
+  for (let section = 1; section <= 3; section++) {
+    traces.push({
+      id: `t${section}`,
+      title: `Phase ${section}`,
+      summary: `Explains phase ${section}.`,
+      locations: [location],
+      children: [`t${section}a`, `t${section}b`, `t${section}c`],
+    });
+    for (const suffix of ["a", "b", "c"]) {
+      traces.push({
+        id: `t${section}${suffix}`,
+        title: `Action ${section}${suffix}`,
+        summary: "Explains a concrete grounded action.",
+        locations: [location],
+      });
+    }
+  }
+
+  const overview =
+    "The request enters through server registration [t1a], then truncation is likely handled downstream [t2a], and it finishes in persistence [t3b].";
+
+  const result = assessCodemapQuality(overview, traces);
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.issues.some((issue) => issue.toLowerCase().includes("speculation")),
+    "should flag the hedge phrase 'likely'"
+  );
 });
 
 test("diagram fallback groups sections and connects trace ids", () => {
@@ -87,8 +118,9 @@ test("diagram renders subgraphs, labeled/conditional edges, and confidence styli
     { id: "t1", title: "Encoding Selection", summary: "", locations: [location], children: ["t1a", "t1b"], confidence: verified },
     { id: "t1a", title: "CLI encoding selection", summary: "", locations: [location], confidence: verified, focus: true },
     { id: "t1b", title: "Metal storage dispatch", summary: "", locations: [location], confidence: lowConf },
-    { id: "t2", title: "TurboQuant", summary: "", locations: [location], children: ["t2a"], confidence: verified },
+    { id: "t2", title: "TurboQuant", summary: "", locations: [location], children: ["t2a", "t2b"], confidence: verified },
     { id: "t2a", title: "Compress during write", summary: "", locations: [location], confidence: verified },
+    { id: "t2b", title: "Store compressed block", summary: "", locations: [location], confidence: verified },
   ];
   const edges: DiagramEdge[] = [
     { from: "t1a", to: "t1b", label: "dispatches to" },
@@ -107,6 +139,11 @@ test("diagram renders subgraphs, labeled/conditional edges, and confidence styli
   // Labeled edge and conditional edge (condition rendered as `if …`).
   assert.match(c, /t1a -->\|"dispatches to"\| t1b/);
   assert.match(c, /t1b -->\|"if TurboQuant"\| t2a/);
+  // Structural flow supplements sparse semantic edges and does not duplicate
+  // relationships already supplied by the model.
+  assert.match(c, /t2a --> t2b/);
+  assert.equal((c.match(/t1a -->/g) ?? []).length, 1);
+  assert.equal((c.match(/t1b -->/g) ?? []).length, 1);
   // Confidence-aware classDefs and their assignments.
   assert.match(c, /classDef unverified/);
   assert.match(c, /class t1b unverified;/);

@@ -64,7 +64,7 @@ function isIgnoredDir(name: string): boolean {
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024; // skip files larger than 2MB during scans
 const MAX_GREP_RESULTS = 200;
-const MAX_FIND_RESULTS = 500;
+const MAX_FIND_RESULTS = 10_000;
 
 export class Tools {
   constructor(private readonly repoRoot: string) {

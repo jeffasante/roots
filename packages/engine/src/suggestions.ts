@@ -454,19 +454,152 @@ const INVENTORY_TOTAL_CAP = 200;
  * Public entry: build the real `ls`-style source inventory for a repo. Shared
  * by the suggestion generator and the codemap research phase so both orient on
  * files that actually exist instead of guessing.
+ *
+ * When a `query` is supplied, files whose paths match the query's keywords are
+ * pinned into a "Files matching your task" section at the top and are always
+ * included — even if they would otherwise fall past the per-language / total
+ * caps. This is what lets a small model traverse the RIGHT deep files instead
+ * of grabbing whatever shallow paths happened to fit under the cap.
  */
-export function repoFileInventory(tools: Tools): string {
-  return buildFileInventory(pickSourceFiles(tools));
+export function repoFileInventory(tools: Tools, query?: string): string {
+  return buildFileInventory(pickSourceFiles(tools), query);
 }
+
+/**
+ * Return the strongest real file-path matches for a task. The agent uses these
+ * to pre-read evidence before a small model gets control of tool selection.
+ */
+export function repoRelevantFiles(tools: Tools, query: string, limit = 4): string[] {
+  const tokens = queryTokens(query);
+  if (!tokens.length) return [];
+  const files = pickSourceFiles(tools);
+  const weights = tokenWeights(tokens, files);
+  return files
+    .map((file) => ({ file, score: queryRelevanceScore(file, tokens, weights) }))
+    .filter((entry) => entry.score >= 2)
+    .sort((a, b) =>
+      b.score !== a.score ? b.score - a.score : a.file.localeCompare(b.file)
+    )
+    .slice(0, limit)
+    .map((entry) => entry.file);
+}
+
+/** Path-agnostic keyword tokens from a free-text task query. */
+function queryTokens(query: string): string[] {
+  const tokens = query
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((t) => t.length >= 3 && !QUERY_STOPWORDS.has(t));
+  return [...new Set(tokens)];
+}
+
+/**
+ * Weight each query token by how DISCRIMINATING it is across the repo. A token
+ * that appears in a large fraction of paths (e.g. the product/repo name like
+ * "cellm", or a top-level folder) carries almost no signal about which file
+ * owns the logic, so it is discounted. Rare tokens (the real discriminators
+ * like "pagetable", "allocator") keep full weight.
+ *
+ * Discounting only engages once the repo is large enough for path-frequency to
+ * mean something, and only for near-ubiquitous tokens — the signature of a
+ * product/repo name — so it never suppresses a legitimately common domain word
+ * (e.g. "cache") in a small tree.
+ */
+function tokenWeights(tokens: string[], files: string[]): Map<string, number> {
+  const weights = new Map<string, number>();
+  const total = files.length;
+  for (const token of tokens) {
+    if (total < DISCOUNT_MIN_FILES) {
+      weights.set(token, 1);
+      continue;
+    }
+    const stem = token.length >= 6 ? token.slice(0, 5) : token;
+    let hits = 0;
+    for (const file of files) {
+      const lower = file.toLowerCase();
+      if (lower.includes(token) || lower.includes(stem)) hits++;
+    }
+    const fraction = hits / total;
+    // Near-ubiquitous → non-discriminating product/repo name → collapse weight.
+    // Everything below the threshold keeps full weight; linear falloff above it.
+    const weight =
+      fraction >= COMMON_TOKEN_FRACTION
+        ? Math.max(0.05, 1 - (fraction - COMMON_TOKEN_FRACTION) / (1 - COMMON_TOKEN_FRACTION))
+        : 1;
+    weights.set(token, weight);
+  }
+  return weights;
+}
+
+/** Below this many files, path-frequency is too noisy to discount tokens. */
+const DISCOUNT_MIN_FILES = 8;
+
+/** A token appearing in at least this fraction of paths starts losing weight. */
+const COMMON_TOKEN_FRACTION = 0.6;
+
+/**
+ * Score a file by how strongly its path matches the task keywords. A hit on the
+ * file's base name is worth more than a hit anywhere in the path, so
+ * `pagetable.rs` outranks `.../page/other.rs` for the token "pagetable".
+ * Each token's contribution is scaled by how discriminating it is repo-wide,
+ * so a product/repo-name token (e.g. "cellm") no longer floats unrelated files.
+ */
+function queryRelevanceScore(
+  file: string,
+  tokens: string[],
+  weights?: Map<string, number>
+): number {
+  if (!tokens.length) return 0;
+  const lower = file.toLowerCase();
+  const base = lower.slice(lower.lastIndexOf("/") + 1);
+  let score = 0;
+  for (const token of tokens) {
+    const stem = token.length >= 6 ? token.slice(0, 5) : token;
+    const weight = weights?.get(token) ?? 1;
+    if (base.includes(token) || base.includes(stem)) score += 3 * weight;
+    else if (lower.includes(token) || lower.includes(stem)) score += 1 * weight;
+  }
+  return score;
+}
+
+const QUERY_STOPWORDS = new Set([
+  "the", "and", "for", "how", "does", "from", "starting", "start", "into", "with",
+  "this", "that", "here", "show", "explain", "trace", "understand", "using", "flow",
+  "through", "following", "file", "files", "code", "app", "apps", "logic", "works",
+  "work", "including", "then", "which", "what", "when", "where", "over", "about",
+]);
+
+/** How many query-relevant files to pin at the top before the grouped list. */
+const INVENTORY_RELEVANT_CAP = 30;
 
 /**
  * Build a real `ls`-style inventory of the source files that actually exist,
  * grouped by extension. This is EVIDENCE, not a hint: every path the model is
  * allowed to name must appear here, which is what stops it inventing library
  * paths that aren't in the repo.
+ *
+ * When `query` is provided, files whose paths match the task keywords are
+ * surfaced first in a dedicated section and are guaranteed to appear — so a
+ * small model can find and traverse the deep, relevant files (e.g.
+ * `crates/cellm-cache/src/pagetable.rs`) instead of only the shallow ones that
+ * fit under the per-language cap.
  */
-function buildFileInventory(sourceFiles: string[]): string {
+function buildFileInventory(sourceFiles: string[], query?: string): string {
   if (!sourceFiles.length) return "";
+
+  const tokens = query ? queryTokens(query) : [];
+  const weights = tokens.length ? tokenWeights(tokens, sourceFiles) : undefined;
+  const relevant = tokens.length
+    ? sourceFiles
+        .map((file) => ({ file, score: queryRelevanceScore(file, tokens, weights) }))
+        .filter((entry) => entry.score >= 2)
+        .sort((a, b) =>
+          b.score !== a.score ? b.score - a.score : a.file.localeCompare(b.file)
+        )
+        .slice(0, INVENTORY_RELEVANT_CAP)
+        .map((entry) => entry.file)
+    : [];
+  const relevantSet = new Set(relevant);
 
   const byExt = new Map<string, string[]>();
   for (const file of sourceFiles) {
@@ -481,11 +614,19 @@ function buildFileInventory(sourceFiles: string[]): string {
   const groups = [...byExt.entries()].sort((a, b) => b[1].length - a[1].length);
 
   const lines: string[] = [];
+  if (relevant.length) {
+    lines.push("Files matching your task (start here):");
+    for (const file of relevant) lines.push(`  ${file}`);
+    lines.push("");
+  }
+
   let total = 0;
   for (const [ext, files] of groups) {
     if (total >= INVENTORY_TOTAL_CAP) break;
-    const shown = files.slice(0, INVENTORY_PER_LANGUAGE);
-    const remaining = files.length - shown.length;
+    // Relevant files are already listed above; don't spend cap budget on them.
+    const rest = files.filter((file) => !relevantSet.has(file));
+    const shown = rest.slice(0, INVENTORY_PER_LANGUAGE);
+    const remaining = rest.length - shown.length;
     lines.push(`${ext} (${files.length} file${files.length === 1 ? "" : "s"}):`);
     for (const file of shown) {
       if (total >= INVENTORY_TOTAL_CAP) break;

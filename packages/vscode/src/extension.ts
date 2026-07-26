@@ -146,6 +146,9 @@ async function generateCodemap(context: vscode.ExtensionContext, requestedQuery?
       try {
         const { codemap } = await engine!.generateCodemap({ query, repoRoot: root, backend });
         await refreshCodemaps();
+        // Auto-open the fresh codemap inline so the user lands on it immediately
+        // instead of having to find it in the library.
+        codemapsView?.openDetail(codemap.id);
         void vscode.window.showInformationMessage(
           `roots: codemap "${codemap.id}" created with ${codemap.traces.length} trace(s).`
         );

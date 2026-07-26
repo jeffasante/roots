@@ -149,6 +149,19 @@ export class CodemapsViewProvider implements vscode.WebviewViewProvider {
     this.render();
   }
 
+  /**
+   * Open a codemap's detail view inline in the sidebar — the same state as
+   * clicking its card. Used to auto-open a codemap as soon as generation
+   * finishes so the user doesn't have to hunt for it in the library.
+   */
+  openDetail(id: string): void {
+    const codemap = this.codemaps.find((item) => item.id === id);
+    if (!codemap) return;
+    this.detail = codemap;
+    this.detailSnippets.clear();
+    this.render();
+  }
+
   setGenerating(query: string): void {
     this.generatingQuery = query;
     this.progress = { phase: "research", message: "Starting repository research" };
@@ -325,7 +338,25 @@ export class CodemapsViewProvider implements vscode.WebviewViewProvider {
   .map-act.danger:hover, .map-act.danger:focus-visible { color:var(--vscode-errorForeground); }
   .map-act svg { width:13px; height:13px; }
   .library-empty { padding:22px 8px; color:var(--muted); text-align:center; font-size:11.5px; }
-  @media (max-width:330px) { .filter-opt span:not(.filter-count) { display:none; } .intensity-opt { min-width:64px; padding-inline:7px; } }
+  @media (max-width:360px) {
+    body { padding-inline:9px; }
+    .section-head h3 { font-size:12px; white-space:nowrap; }
+    .section-toggle { min-width:0; }
+    .section-toggle h3 { overflow:hidden; text-overflow:ellipsis; }
+    .intensity { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); width:100%; }
+    .intensity-opt { min-width:0; padding-inline:5px; }
+    .map-main { padding-right:0; }
+    .map-actions { position:absolute; top:6px; right:6px; margin:0; padding-left:8px; background:var(--vscode-list-hoverBackground); }
+    .map-card:not(:hover):not(:focus-within) .map-actions { pointer-events:none; background:transparent; }
+    .library-head { flex-wrap:wrap; }
+  }
+  @media (max-width:280px) {
+    body { padding-inline:7px; }
+    .generate-row { grid-template-columns:1fr; gap:6px; }
+    .library-filter { width:100%; margin-left:0; }
+    .filter-opt { flex:1; justify-content:center; }
+    .filter-opt span:not(.filter-count) { display:none; }
+  }
   .progress-card { margin-top:17px; padding:12px; border:1px solid var(--border); border-radius:6px; background:var(--vscode-sideBarSectionHeader-background); }
   .progress-head { display:flex; align-items:center; gap:8px; }
   .progress-step { margin-left:auto; font-size:11px; color:var(--muted); font-weight:400; }

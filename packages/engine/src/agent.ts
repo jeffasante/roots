@@ -1,5 +1,5 @@
 import type { InferenceBackend } from "./backends/types.js";
-import { repoFileInventory } from "./suggestions.js";
+import { repoFileInventory, repoRelevantFiles } from "./suggestions.js";
 import { Tools } from "./tools.js";
 import type { Codemap, Diagram, DiagramEdge, LogEntry, Trace } from "./types.js";
 import { CODEMAP_VERSION } from "./types.js";
@@ -49,7 +49,7 @@ Tool inputs:
 - done: {}  (emit when you have enough to build a detailed codemap)
 
 Method — trace the flow like an engineer reading the code for the first time:
-1. Orient: list the relevant directory and find the entry point(s) for the task.
+1. Orient: if the inventory has a "Files matching your task" section, OPEN THOSE FILES FIRST — they are the strongest leads. Otherwise list the relevant directory and find the entry point(s) for the task.
 2. Follow the call chain: from each entry point, read the actual function bodies and follow what they call, register, or dispatch to. Do not stop at the first hit.
 3. Capture structure: note distinct phases/groups (e.g. "router setup", "auth middleware", "request handling") and the concrete symbols and line ranges inside each.
 4. Read enough of each key function to quote a real line and explain it — confirm line numbers by reading before citing.
@@ -90,7 +90,7 @@ Shape:
 }
 
 Rules:
-- Build a TWO-LEVEL tree: 3–6 top-level sections (phases/concepts), each with 2–4 concrete child sub-steps referenced via "children" ids. Aim for 10+ total traces when the research supports it.
+- Build a TWO-LEVEL tree: 3–6 top-level sections (phases/concepts), each with 3–5 concrete child sub-steps referenced via "children" ids. Aim for 12–18 total traces when the research supports it. A section with no children is acceptable only when the cited code is genuinely a single atomic step.
 - Every location MUST be a real file and line range from the research log. Never invent files or lines. Point child locations at the exact function/statement (tight ranges), and section locations at the enclosing block.
 - Titles: sections name a concept ("Admin Authentication Middleware"); children name a concrete action ("API key extraction from headers").
 - Top-level sections should include "motivation" and "details" when the research supports them.
@@ -121,11 +121,24 @@ export class Agent {
 
     // Orient the model on the files that ACTUALLY exist before it starts
     // reading. Without this it guesses plausible-but-fake paths (library names,
-    // wrong extensions) and burns research steps on read errors.
-    const inventory = repoFileInventory(tools);
+    // wrong extensions) and burns research steps on read errors. Passing the
+    // query pins task-relevant files (even deep ones) to the top so a small
+    // model traverses the right files instead of whatever fits under the cap.
+    const inventory = repoFileInventory(tools, opts.query);
     const taskContext = inventory
       ? `Task: ${opts.query}\n\n${inventory}\n\nOnly read/grep files that appear in the inventory above.`
       : `Task: ${opts.query}`;
+
+    // Prime research with real code from the strongest path matches. Small
+    // models can ignore even an excellent inventory on their first turn; this
+    // deterministic evidence ensures synthesis sees the likely owning files
+    // and gives the model concrete symbols to follow across the call chain.
+    for (const file of repoRelevantFiles(tools, opts.query)) {
+      const result = tools.readFile(file, 1, 180);
+      log.push({ tool: "read_file", input: { path: file, start: 1, end: 180 }, output: result, ts: now() });
+      history.push(JSON.stringify({ tool: "read_file", input: { path: file, start: 1, end: 180 } }));
+      history.push(`Pre-read query-matched file: ${truncate(JSON.stringify(result), 3000)}`);
+    }
 
     // ---- Phase 1: research ----
     for (let step = 0; step < maxSteps; step++) {
@@ -457,26 +470,27 @@ function buildMermaidDiagram(traces: Trace[], edges: DiagramEdge[] = []): string
     lines.push(label ? `  ${from} -->|"${label}"| ${to}` : `  ${from} --> ${to}`);
   };
 
-  if (edges.length > 0) {
-    for (const edge of edges) {
-      if (!byId.has(edge.from) || !byId.has(edge.to)) continue;
-      emit(mermaidId(edge.from), mermaidId(edge.to), edgeLabel(edge));
-    }
-  } else {
-    // Legacy fallback: chain children within a section, then link sections.
-    let previousLast: string | undefined;
-    roots.forEach((root) => {
-      const children = (root.children ?? [])
-        .map((id) => byId.get(id))
-        .filter((t): t is Trace => Boolean(t));
-      const nodes = children.length > 0 ? children : [root];
-      nodes.forEach((trace, i) => {
-        if (i > 0) emit(mermaidId(nodes[i - 1].id), mermaidId(trace.id));
-      });
-      if (previousLast) emit(previousLast, mermaidId(nodes[0].id));
-      previousLast = mermaidId(nodes[nodes.length - 1].id);
-    });
+  for (const edge of edges) {
+    if (!byId.has(edge.from) || !byId.has(edge.to)) continue;
+    emit(mermaidId(edge.from), mermaidId(edge.to), edgeLabel(edge));
   }
+
+  // Always complete the semantic edges with structural execution order. Small
+  // models often find a few excellent labeled relationships but omit the rest;
+  // dropping this fallback whenever one edge exists leaves a sparse, fragmented
+  // diagram. `emit` de-duplicates relationships already supplied by the model.
+  let previousLast: string | undefined;
+  roots.forEach((root) => {
+    const children = (root.children ?? [])
+      .map((id) => byId.get(id))
+      .filter((t): t is Trace => Boolean(t));
+    const nodes = children.length > 0 ? children : [root];
+    nodes.forEach((trace, i) => {
+      if (i > 0) emit(mermaidId(nodes[i - 1].id), mermaidId(trace.id));
+    });
+    if (previousLast) emit(previousLast, mermaidId(nodes[0].id));
+    previousLast = mermaidId(nodes[nodes.length - 1].id);
+  });
 
   // Phase fills give each section a distinct, muted background so groups read
   // as groups. Palette is restrained per the project's UI direction.
@@ -582,22 +596,59 @@ export function assessCodemapQuality(overview: string | undefined, traces: Trace
   const childIds = new Set(traces.flatMap((trace) => trace.children ?? []).filter((id) => ids.has(id)));
   const roots = traces.filter((trace) => !childIds.has(trace.id));
   const rootsWithChildren = roots.filter((trace) =>
-    (trace.children ?? []).filter((id) => ids.has(id)).length >= 2
+    (trace.children ?? []).filter((id) => ids.has(id)).length >= 3
   ).length;
   const grounded = traces.filter((trace) => trace.locations.length > 0).length;
   const issues: string[] = [];
 
   if (!overview || overview.length < 120) issues.push("Write a concrete overview of at least 2 sentences with inline [trace-id] references.");
   if (roots.length < 3) issues.push(`Create at least 3 top-level sections; found ${roots.length}.`);
-  if (traces.length < 8) issues.push(`Create at least 8 total grounded nodes; found ${traces.length}.`);
+  if (traces.length < 12) issues.push(`Create at least 12 total grounded nodes; found ${traces.length}.`);
   if (roots.length > 0 && rootsWithChildren / roots.length < 0.6) {
-    issues.push("Give at least 60% of top-level sections two or more concrete child steps.");
+    issues.push("Give at least 60% of top-level sections three or more concrete child steps.");
   }
   if (traces.length > 0 && grounded / traces.length < 0.8) {
     issues.push("Ground at least 80% of nodes in exact locations from the research log.");
   }
 
+  const speculative = findSpeculativePhrase(overview, traces);
+  if (speculative) {
+    issues.push(
+      `Remove speculation ("${speculative}"). Describe only what the research log proves; ` +
+        "if a step is not shown by a read/grep result, do not include it."
+    );
+  }
+
   return { ok: issues.length === 0, issues };
+}
+
+/** Hedge phrases that betray a hallucinated step rather than grounded evidence. */
+const SPECULATIVE_PATTERNS: RegExp[] = [
+  /\blikely\b/i,
+  /\bprobably\b/i,
+  /\bpresumably\b/i,
+  /\bappears? to\b/i,
+  /\bseems? to\b/i,
+  /\bmight\b/i,
+  /\bmay (?:be|handle|contain)\b/i,
+  /\bnot explicitly (?:mentioned|shown|defined)\b/i,
+  /\bwould (?:be|likely)\b/i,
+  /\bassum(?:e|ing|ed)\b/i,
+];
+
+/** Return the first speculative phrase found in the overview or any trace text. */
+function findSpeculativePhrase(overview: string | undefined, traces: Trace[]): string | null {
+  const haystacks = [
+    overview ?? "",
+    ...traces.flatMap((t) => [t.title, t.summary, t.motivation ?? "", t.details ?? ""]),
+  ];
+  for (const text of haystacks) {
+    for (const pattern of SPECULATIVE_PATTERNS) {
+      const match = text.match(pattern);
+      if (match) return match[0];
+    }
+  }
+  return null;
 }
 
 function codemapQualityScore(overview: string | undefined, traces: Trace[]): number {
